@@ -84,12 +84,12 @@ function detectRecurringBills(txs: Transaction[]) {
   return bills.sort((a, b) => a.daysUntil - b.daysUntil).slice(0, 6);
 }
 
-function UpcomingBillsFromTx({ transactions, loading }: { transactions: Transaction[]; loading: boolean }) {
+function UpcomingBillsFromTx({ transactions, loading, limit = 5 }: { transactions: Transaction[]; loading: boolean; limit?: number }) {
   if (loading) {
     return <div style={{ padding: "24px 18px", color: T.fgMuted, fontSize: 13, textAlign: "center" }}>Loading…</div>;
   }
 
-  const bills = detectRecurringBills(transactions);
+  const bills = detectRecurringBills(transactions).slice(0, limit);
 
   if (bills.length === 0) {
     return (
@@ -168,6 +168,7 @@ export default function OverviewScreen() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [txLoading, setTxLoading] = useState(true);
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
+  const [showAllBills, setShowAllBills] = useState(false);
 
   useEffect(() => {
     // Fetch 180 days (6 months) for reliable recurring bill detection
@@ -194,9 +195,9 @@ export default function OverviewScreen() {
     .filter((a) => a.type !== "credit")
     .slice(0, 5);
 
-  // ── Real spending categories — this month only ──────────────────────────────
-  const thisMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
-  const debitTx = transactions.filter((t) => t.amount > 0 && t.date.startsWith(thisMonth));
+  // ── Real spending — last 30 days (avoids empty-on-1st-of-month problem) ─────
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10);
+  const debitTx = transactions.filter((t) => t.amount > 0 && t.date >= thirtyDaysAgo);
   const totalSpent = debitTx.reduce((s, t) => s + t.amount, 0);
   const catMap: Record<string, { id: string; label: string; color: string; spent: number; budget: number }> = {};
   for (const tx of debitTx) {
@@ -274,7 +275,7 @@ export default function OverviewScreen() {
 
         {/* Spending donut — real transactions or prompt to sync */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: 20 }}>
-          <div style={{ fontWeight: 600, fontSize: 15, color: T.fg, marginBottom: 4 }}>Spending this month</div>
+          <div style={{ fontWeight: 600, fontSize: 15, color: T.fg, marginBottom: 4 }}>Spending — last 30 days</div>
           <div style={{ fontSize: 12.5, color: T.fgMuted, marginBottom: 16 }}>
             {hasTransactions ? `${debitTx.length} transactions` : "From linked accounts"}
           </div>
@@ -327,9 +328,31 @@ export default function OverviewScreen() {
 
         {/* Upcoming bills — detected from recurring transactions */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, overflow: "hidden" }}>
-          <CardHead title="Upcoming bills" />
-          <UpcomingBillsFromTx transactions={transactions} loading={txLoading} />
+          <CardHead
+            title="Upcoming bills"
+            action={
+              <button onClick={() => setShowAllBills(true)} style={{ background: "none", border: "none", color: T.accent, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: FONT, padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                View all <Icon name="arrow" size={13} color={T.accent} />
+              </button>
+            }
+          />
+          <UpcomingBillsFromTx transactions={transactions} loading={txLoading} limit={5} />
         </div>
+
+        {/* All bills modal */}
+        {showAllBills && (
+          <div onClick={() => setShowAllBills(false)} style={{ position: "fixed", inset: 0, background: "rgba(22,17,14,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, width: 480, maxWidth: "calc(100vw - 32px)", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(22,17,14,.14)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${T.borderSubtle}` }}>
+                <div style={{ fontWeight: 700, fontSize: 16, color: T.fg, fontFamily: FONT }}>All upcoming bills</div>
+                <button onClick={() => setShowAllBills(false)} style={{ background: "none", border: "none", fontSize: 20, color: T.fgMuted, cursor: "pointer", lineHeight: 1 }}>×</button>
+              </div>
+              <div style={{ overflowY: "auto", flex: 1 }}>
+                <UpcomingBillsFromTx transactions={transactions} loading={txLoading} limit={50} />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
