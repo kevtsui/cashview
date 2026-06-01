@@ -46,15 +46,13 @@ function normalizeName(tx: Transaction): string {
 }
 
 // ── Recurring bill detection (6-month window) ────────────────────────────────
-// Criteria:
-//   1. Amount ≥ $15
-//   2. Normalized merchant name appears in 2+ months (3+ for amounts < $100)
-//   3. Amounts within 25% of median
-//   4. Due date predicted from day-of-month pattern
+// Detects any cadence (weekly, monthly, bimonthly, quarterly) by measuring the
+// average gap between occurrences and projecting forward. Variable-amount bills
+// (garbage, water) are shown with "est." and average amount.
 function detectRecurringBills(txs: Transaction[]) {
-  const debits = txs.filter((t) => t.amount >= 15);
+  const debits = txs.filter((t) => t.amount >= 10);
 
-  // Group by NORMALIZED name
+  // Group by normalized name
   const byMerchant: Record<string, { label: string; txs: Transaction[] }> = {};
   for (const tx of debits) {
     const key = normalizeName(tx).toLowerCase();
@@ -64,37 +62,65 @@ function detectRecurringBills(txs: Transaction[]) {
   }
 
   const now = Date.now();
-  const bills: { id: string; label: string; amt: number; dueDate: Date; daysUntil: number }[] = [];
+  const bills: {
+    id: string; label: string; amt: number; isVariable: boolean;
+    cadence: string; dueDate: Date; daysUntil: number;
+  }[] = [];
 
   for (const { label, txs: group } of Object.values(byMerchant)) {
-    const months = new Set(group.map((t) => t.date.slice(0, 7)));
-    const amounts = group.map((t) => t.amount).sort((a, b) => a - b);
-    const median = amounts[Math.floor(amounts.length / 2)];
+    if (group.length < 2) continue; // need at least 2 occurrences
 
-    // Require 3+ months for small amounts, 2+ for larger ones (mortgage-sized)
-    const minMonths = median >= 100 ? 2 : 3;
-    if (months.size < minMonths) continue;
+    // Sort chronologically
+    const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
 
-    // Amount consistency within 25%
-    const consistent = amounts.every((a) => Math.abs(a - median) / median < 0.25);
-    if (!consistent) continue;
-
-    // Day-of-month prediction
-    const days = group.map((t) => new Date(t.date + "T12:00:00").getDate());
-    const dayFreq: Record<number, number> = {};
-    for (const d of days) dayFreq[d] = (dayFreq[d] ?? 0) + 1;
-    const typicalDay = parseInt(Object.entries(dayFreq).sort((a, b) => b[1] - a[1])[0][0]);
-
-    const today = new Date();
-    let next = new Date(today.getFullYear(), today.getMonth(), typicalDay);
-    if (next.getTime() < now - 3 * 86400_000) {
-      next = new Date(today.getFullYear(), today.getMonth() + 1, typicalDay);
+    // Measure average gap between consecutive occurrences
+    const gaps: number[] = [];
+    for (let i = 1; i < sorted.length; i++) {
+      const d1 = new Date(sorted[i - 1].date + "T12:00:00").getTime();
+      const d2 = new Date(sorted[i].date + "T12:00:00").getTime();
+      gaps.push((d2 - d1) / 86400_000);
     }
-    const daysUntil = Math.round((next.getTime() - now) / 86400_000);
-    if (daysUntil < -3 || daysUntil > 45) continue;
+    const avgGap = gaps.reduce((s, g) => s + g, 0) / gaps.length;
 
-    const latest = [...group].sort((a, b) => b.date.localeCompare(a.date))[0];
-    bills.push({ id: latest.id.toString(), label, amt: median, dueDate: next, daysUntil });
+    // Classify cadence — ignore if gap is too irregular or too infrequent
+    let cadenceLabel: string;
+    if (avgGap <= 10)        cadenceLabel = "weekly";
+    else if (avgGap <= 45)   cadenceLabel = "monthly";
+    else if (avgGap <= 75)   cadenceLabel = "bimonthly";
+    else if (avgGap <= 105)  cadenceLabel = "quarterly";
+    else continue; // too infrequent to be a bill
+
+    // Check gap consistency — skip if wildly irregular (not a real cadence)
+    if (gaps.length > 1) {
+      const gapVariance = Math.max(...gaps) / Math.min(...gaps);
+      if (gapVariance > 2.5) continue; // gaps vary too much
+    }
+
+    // Amount stats
+    const amounts = sorted.map((t) => t.amount);
+    const avgAmt = amounts.reduce((s, a) => s + a, 0) / amounts.length;
+    const maxAmt = Math.max(...amounts);
+    const minAmt = Math.min(...amounts);
+    const isVariable = maxAmt / minAmt > 1.3; // >30% spread = variable
+
+    // Project next due date = last occurrence + average gap
+    const lastDate = new Date(sorted[sorted.length - 1].date + "T12:00:00");
+    const nextDate = new Date(lastDate.getTime() + avgGap * 86400_000);
+    const daysUntil = Math.round((nextDate.getTime() - now) / 86400_000);
+
+    // Only show if due within next 60 days or up to 5 days overdue
+    if (daysUntil < -5 || daysUntil > 60) continue;
+
+    const latest = sorted[sorted.length - 1];
+    bills.push({
+      id: latest.id.toString(),
+      label,
+      amt: Math.round(avgAmt * 100) / 100,
+      isVariable,
+      cadence: cadenceLabel,
+      dueDate: nextDate,
+      daysUntil,
+    });
   }
 
   return bills.sort((a, b) => a.daysUntil - b.daysUntil);
@@ -124,6 +150,11 @@ function UpcomingBillsFromTx({ transactions, loading, limit = 5 }: { transaction
       {bills.map((bill, i) => {
         const dateLabel = bill.dueDate.toLocaleString("en-US", { month: "short", day: "numeric" });
         const overdue = bill.daysUntil < 0;
+        const sub = [
+          dateLabel,
+          overdue ? "overdue" : bill.daysUntil === 0 ? "today" : null,
+          bill.cadence !== "monthly" ? bill.cadence : null,
+        ].filter(Boolean).join(" · ");
         return (
           <div key={bill.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 18px", borderTop: i ? `1px solid ${T.borderSubtle}` : "none" }}>
             <span style={{ width: 30, height: 30, borderRadius: 8, background: T.bgChip, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -131,11 +162,12 @@ function UpcomingBillsFromTx({ transactions, loading, limit = 5 }: { transaction
             </span>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 600, fontSize: 13.5, color: T.fg }}>{bill.label}</div>
-              <div style={{ fontSize: 12, color: overdue ? T.negative : T.fgMuted, marginTop: 1 }}>
-                {dateLabel}{overdue ? " · overdue" : bill.daysUntil === 0 ? " · today" : ""}
-              </div>
+              <div style={{ fontSize: 12, color: overdue ? T.negative : T.fgMuted, marginTop: 1 }}>{sub}</div>
             </div>
-            <Money value={-bill.amt} size={14} weight={600} cents={false} />
+            <div style={{ textAlign: "right" }}>
+              <Money value={-bill.amt} size={14} weight={600} cents={false} />
+              {bill.isVariable && <div style={{ fontSize: 11, color: T.fgSubtle, marginTop: 1 }}>est.</div>}
+            </div>
           </div>
         );
       })}
