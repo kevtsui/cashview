@@ -66,11 +66,13 @@ function KpiCard({ label, value, delta, deltaBg, deltaColor, sparkValues, sparkC
           <Sparkline values={sparkValues} color={sparkColor} />
         </div>
       </div>
-      <div style={{ marginTop: 10 }}>
-        <span style={{ display: "inline-flex", alignItems: "center", padding: "3px 9px", borderRadius: 999, background: deltaBg, color: deltaColor, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
-          {delta}
-        </span>
-      </div>
+      {delta && (
+        <div style={{ marginTop: 10 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", padding: "3px 9px", borderRadius: 999, background: deltaBg, color: deltaColor, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" }}>
+            {delta}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -108,12 +110,12 @@ export default function OverviewScreen() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, fontFamily: FONT }}>
 
-      {/* ── KPI strip ──────────────────────────────────────────────────────── */}
+      {/* ── KPI strip — deltas hidden until historical data is available ───── */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-        <KpiCard label="Total cash"   value={cash}     delta="+$1,420 (30d)" deltaBg={T.positiveSoft} deltaColor={T.positive} sparkValues={CASH_SPARK}   sparkColor={T.accent}   />
-        <KpiCard label="Net worth"    value={netWorth}  delta="+5.2% (12mo)"  deltaBg={T.positiveSoft} deltaColor={T.positive} sparkValues={NW_SPARK}     sparkColor={T.invest}   />
-        <KpiCard label="Investments"  value={invest}    delta="+0.74% today"  deltaBg={T.investSoft}   deltaColor={T.invest}   sparkValues={INVEST_SPARK} sparkColor={T.invest}   valueTone={T.invest} />
-        <KpiCard label="Card debt"    value={debt}      delta="due Jun 14"    deltaBg={T.negativeSoft} deltaColor={T.negative} sparkValues={DEBT_SPARK}   sparkColor={T.negative} />
+        <KpiCard label="Total cash"  value={cash}    sparkValues={CASH_SPARK}   sparkColor={T.accent}   />
+        <KpiCard label="Net worth"   value={netWorth} sparkValues={NW_SPARK}     sparkColor={T.invest}   />
+        <KpiCard label="Investments" value={invest}   sparkValues={INVEST_SPARK} sparkColor={T.invest}   valueTone={invest > 0 ? T.invest : undefined} />
+        <KpiCard label="Card debt"   value={debt}     sparkValues={DEBT_SPARK}   sparkColor={T.negative} />
       </div>
 
       {/* ── Chart row — only shown when accounts are connected ─────────────── */}
