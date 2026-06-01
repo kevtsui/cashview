@@ -116,8 +116,14 @@ export default function OverviewScreen() {
         <KpiCard label="Card debt"    value={debt}      delta="due Jun 14"    deltaBg={T.negativeSoft} deltaColor={T.negative} sparkValues={DEBT_SPARK}   sparkColor={T.negative} />
       </div>
 
-      {/* ── Chart row — fixed height so both cards align ───────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16, alignItems: "stretch" }}>
+      {/* ── Chart row — only shown when accounts are connected ─────────────── */}
+      {accounts.length === 0 && (
+        <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: "40px 32px", textAlign: "center" }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: T.fg, marginBottom: 8, fontFamily: FONT }}>Connect your first account</div>
+          <div style={{ fontSize: 13.5, color: T.fgMuted, fontFamily: FONT }}>Click <strong>+ Add account</strong> above to link Chase, Morgan Stanley, or any other bank.</div>
+        </div>
+      )}
+      <div style={{ display: accounts.length === 0 ? "none" : "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16, alignItems: "stretch" }}>
 
         {/* Net worth area chart */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: 20, display: "flex", flexDirection: "column" }}>
@@ -143,8 +149,8 @@ export default function OverviewScreen() {
         </div>
       </div>
 
-      {/* ── Lower row ──────────────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
+      {/* ── Lower row — hide placeholder bills when no accounts ─────────────── */}
+      <div style={{ display: accounts.length === 0 ? "none" : "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
 
         {/* Accounts */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, overflow: "hidden" }}>

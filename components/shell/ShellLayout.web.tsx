@@ -130,6 +130,7 @@ function MobileTabBar({ active }: { active: string }) {
 // ── Add account button — uses usePlaidLink directly (avoids RN StyleSheet issues) ─
 function AddAccountButton() {
   const { linkToken, onPlaidSuccess, refreshLinkToken } = useAccounts();
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const { open, ready } = usePlaidLink({
     token: linkToken ?? "",
@@ -139,19 +140,33 @@ function AddAccountButton() {
     onExit: () => refreshLinkToken(),
   });
 
+  const handleClick = async () => {
+    setFetchError(null);
+    if (linkToken && ready) {
+      open();
+    } else {
+      // Token not ready — try to fetch one fresh
+      try {
+        await refreshLinkToken();
+        // Small delay to let state update, then the next render will have the token
+      } catch (e: any) {
+        setFetchError("Couldn't connect to Plaid. Check Supabase secrets.");
+      }
+    }
+  };
+
   return (
-    <button
-      style={{
-        ...css.primaryBtn,
-        opacity: !linkToken ? 0.6 : 1,
-        cursor: !linkToken ? "default" : "pointer",
-      }}
-      onClick={() => linkToken && open()}
-      disabled={!ready || !linkToken}
-    >
-      <Icon name="plus" size={15} color="#fff" />
-      Add account
-    </button>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+      <button style={css.primaryBtn} onClick={handleClick}>
+        <Icon name="plus" size={15} color="#fff" />
+        {linkToken && ready ? "Add account" : "Add account"}
+      </button>
+      {fetchError && (
+        <span style={{ fontSize: 11, color: "#C0382B", fontFamily: FONT, maxWidth: 200, textAlign: "right" }}>
+          {fetchError}
+        </span>
+      )}
+    </div>
   );
 }
 
