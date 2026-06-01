@@ -1,9 +1,9 @@
 // app/(app)/investments.web.tsx — Investments view using live Plaid balance data.
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { useAccounts } from "@/lib/AccountsContext";
-import { NET_WORTH_SERIES } from "@/lib/data";
+import { fetchSnapshots, NetWorthSnapshot } from "@/lib/api";
 import Money, { formatCompact, formatMoney } from "@/components/shared/Money";
 import InstMark from "@/components/shared/InstMark";
 import Icon from "@/components/shared/Icon";
@@ -25,6 +25,11 @@ const ALLOC_COLORS = ["#3C8C7E", "#E5634A", "#D99A22", "#7A716A"];
 
 export default function InvestmentsScreen() {
   const { accounts, loading } = useAccounts();
+  const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
+
+  useEffect(() => {
+    fetchSnapshots(365).then(setSnapshots).catch(console.error);
+  }, []);
 
   const investAccounts = accounts.filter((a) =>
     ["investment", "brokerage", "retirement", "401k", "ira"].includes(a.type ?? "")
@@ -32,7 +37,7 @@ export default function InvestmentsScreen() {
 
   const totalInvested = investAccounts.reduce((s, a) => s + (a.current_balance ?? 0), 0);
 
-  // Build allocation from account subtypes (best we can without holdings API)
+  // Build allocation from account subtypes
   const byType = investAccounts.reduce<Record<string, number>>((acc, a) => {
     const key = a.subtype ?? a.type ?? "other";
     acc[key] = (acc[key] ?? 0) + (a.current_balance ?? 0);
@@ -44,8 +49,13 @@ export default function InvestmentsScreen() {
     color: ALLOC_COLORS[i % ALLOC_COLORS.length],
   }));
 
-  // Trend using placeholder series (live YTD would need holdings history)
-  const investSeries = NET_WORTH_SERIES.map((p) => ({ month: p.month, value: p.value * 0.78 }));
+  // Real invest trend from snapshots
+  const investSeries = snapshots.length > 1
+    ? snapshots.map((s) => ({
+        month: new Date(s.captured_at + "T12:00:00").toLocaleString("en-US", { month: "short", day: "numeric" }),
+        value: s.invest,
+      }))
+    : null; // null = not enough data yet
 
   if (loading) {
     return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 300, color: T.fgMuted, fontFamily: FONT }}>Loading…</div>;
@@ -82,6 +92,7 @@ export default function InvestmentsScreen() {
             </span>
           </div>
           <div style={{ flex: 1, minHeight: 130, marginTop: 20 }}>
+            {investSeries ? (
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={investSeries} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
                 <defs>
@@ -96,6 +107,13 @@ export default function InvestmentsScreen() {
                 <Area type="monotone" dataKey="value" stroke={T.invest} strokeWidth={2} fill="url(#invGrad)" dot={false} activeDot={{ r: 4, fill: T.invest, strokeWidth: 0 }} />
               </AreaChart>
             </ResponsiveContainer>
+            ) : (
+              <div style={{ height: 130, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <span style={{ fontSize: 12, color: T.fgSubtle, textAlign: "center" }}>
+                  Trend builds as you Refresh daily.
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
