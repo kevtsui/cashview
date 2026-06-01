@@ -117,10 +117,23 @@ export interface Transaction {
   name: string;
   personal_finance_category: string | null;
   category_primary: string | null;
+  user_category: string | null;
+  user_category_label: string | null;
+  confirmed: boolean;
   amount: number;  // positive = debit (money out), negative = credit (money in)
   date: string;
   pending: boolean;
   currency_code: string;
+  created_at: string;
+}
+
+export interface TransactionRule {
+  id: string;
+  household_id: string;
+  merchant_pattern: string;
+  category_key: string;
+  category_label: string;
+  color: string;
   created_at: string;
 }
 
@@ -157,6 +170,82 @@ export async function fetchSnapshots(days = 365): Promise<NetWorthSnapshot[]> {
     .order("captured_at", { ascending: true });
   if (error) throw error;
   return data ?? [];
+}
+
+// ── Transaction rules (user-defined category mappings) ──────────────────────
+export async function fetchTransactionRules(): Promise<TransactionRule[]> {
+  const { data, error } = await supabase.from("transaction_rules").select("*");
+  if (error) throw error;
+  return data ?? [];
+}
+
+// Normalize a merchant name to a pattern key (same logic as the frontend normalizeName)
+export function merchantPattern(tx: Transaction): string {
+  const raw = tx.merchant_name ?? tx.name;
+  return raw
+    .replace(/\s+(PPD|WEB|CCD|TEL|ACH)\s+.*$/i, "")
+    .replace(/\s+ID[:\s#]+[\w\d\-]+/gi, "")
+    .replace(/\s+REF[:\s#]+[\w\d]+/gi, "")
+    .replace(/\s+#[\d\-]+/g, "")
+    .replace(/\s+PMT\s+#?[\d\-]+/gi, "")
+    .replace(/\s+(TO|FROM)\s+(CHK|SAV|CHECKING|SAVINGS|ACCT|ACCOUNT|DDA)\s*[\d\*x]+/gi, "")
+    .replace(/\s+(TO|FROM)\s+[\*x\d]{4,}/gi, "")
+    .replace(/\s+\d{4,}/g, "")
+    .replace(/\s+\*[\w\d]+$/i, "")
+    .replace(/(zelle\s+payment\s+to)\s+.+$/i, "Zelle payment")
+    .replace(/(venmo\s+payment\s+to)\s+.+$/i, "Venmo payment")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+// Categorize a single transaction and apply rule to all matching merchants
+export async function categorizeTransaction(tx: Transaction, categoryKey: string, categoryLabel: string, color: string): Promise<void> {
+  const pattern = merchantPattern(tx);
+
+  // 1. Update this transaction
+  await supabase.from("transactions").update({
+    user_category: categoryKey,
+    user_category_label: categoryLabel,
+    confirmed: true,
+  }).eq("id", tx.id);
+
+  // 2. Upsert the rule
+  await supabase.from("transaction_rules").upsert({
+    merchant_pattern: pattern,
+    category_key: categoryKey,
+    category_label: categoryLabel,
+    color,
+  }, { onConflict: "household_id,merchant_pattern" });
+
+  // 3. Apply rule to all unconfirmed transactions with the same merchant pattern
+  // We do this by fetching matching transactions and updating them
+  const { data: matching } = await supabase
+    .from("transactions")
+    .select("id, merchant_name, name")
+    .eq("confirmed", false);
+
+  if (matching && matching.length > 0) {
+    const matchingIds = matching
+      .filter((t: any) => {
+        const p = merchantPattern(t as Transaction);
+        return p === pattern;
+      })
+      .map((t: any) => t.id);
+
+    if (matchingIds.length > 0) {
+      await supabase.from("transactions").update({
+        user_category: categoryKey,
+        user_category_label: categoryLabel,
+        confirmed: true,
+      }).in("id", matchingIds);
+    }
+  }
+}
+
+// Confirm a transaction without changing category
+export async function confirmTransaction(txId: string): Promise<void> {
+  await supabase.from("transactions").update({ confirmed: true }).eq("id", txId);
 }
 
 // ── Category helpers ────────────────────────────────────────────────────────
