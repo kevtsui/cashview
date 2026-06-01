@@ -1,7 +1,7 @@
 // components/shell/ShellLayout.web.tsx — Command Center shell for web.
 // Imports lucide-react directly (no Icon wrapper) to avoid Metro resolution issues.
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { usePathname, useRouter } from "expo-router";
 import { usePlaidLink } from "react-plaid-link";
 import { useAccounts } from "@/lib/AccountsContext";
@@ -127,43 +127,80 @@ function MobileTabBar({ active }: { active: string }) {
   );
 }
 
-// ── Add account button — uses usePlaidLink directly (avoids RN StyleSheet issues) ─
+// ── Add account button ────────────────────────────────────────────────────────
+// Uses usePlaidLink directly. Handles two cases:
+//   1. Normal flow: fetch token → open Plaid Link
+//   2. OAuth redirect return (Chase etc.): re-init with receivedRedirectUri and auto-open
 function AddAccountButton() {
   const { linkToken, onPlaidSuccess, refreshLinkToken } = useAccounts();
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const shouldOpenRef = useRef(false);
+
+  // Detect OAuth redirect return (Plaid sends back oauth_state_id in the URL)
+  const receivedRedirectUri =
+    typeof window !== "undefined" && window.location.href.includes("oauth_state_id")
+      ? window.location.href
+      : undefined;
 
   const { open, ready } = usePlaidLink({
     token: linkToken ?? "",
+    ...(receivedRedirectUri ? { receivedRedirectUri } : {}),
     onSuccess: (publicToken, meta) => {
       onPlaidSuccess(publicToken, meta.institution ?? undefined);
     },
-    onExit: () => refreshLinkToken(),
+    onExit: () => {
+      shouldOpenRef.current = false;
+      refreshLinkToken();
+    },
   });
 
-  const handleClick = async () => {
-    setFetchError(null);
+  // Auto-open once Plaid Link becomes ready after we fetched a token
+  useEffect(() => {
+    if (shouldOpenRef.current && ready && linkToken) {
+      shouldOpenRef.current = false;
+      open();
+    }
+  }, [ready, linkToken, open]);
+
+  // Auto-open on OAuth redirect return
+  useEffect(() => {
+    if (receivedRedirectUri && ready && linkToken) {
+      open();
+    }
+  }, [receivedRedirectUri, ready, linkToken, open]);
+
+  const handleClick = useCallback(async () => {
+    setError(null);
     if (linkToken && ready) {
       open();
-    } else {
-      // Token not ready — try to fetch one fresh
-      try {
-        await refreshLinkToken();
-        // Small delay to let state update, then the next render will have the token
-      } catch (e: any) {
-        setFetchError("Couldn't connect to Plaid. Check Supabase secrets.");
-      }
+      return;
     }
-  };
+    // Token not ready yet — fetch one and auto-open when ready
+    setLoading(true);
+    shouldOpenRef.current = true;
+    const token = await refreshLinkToken();
+    setLoading(false);
+    if (!token) {
+      shouldOpenRef.current = false;
+      setError("Couldn't reach Plaid — check browser console for details.");
+    }
+    // If token was fetched, the useEffect above will call open() once ready
+  }, [linkToken, ready, open, refreshLinkToken]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-      <button style={css.primaryBtn} onClick={handleClick}>
+      <button
+        style={{ ...css.primaryBtn, opacity: loading ? 0.7 : 1 }}
+        onClick={handleClick}
+        disabled={loading}
+      >
         <Icon name="plus" size={15} color="#fff" />
-        {linkToken && ready ? "Add account" : "Add account"}
+        {loading ? "Loading…" : "Add account"}
       </button>
-      {fetchError && (
-        <span style={{ fontSize: 11, color: "#C0382B", fontFamily: FONT, maxWidth: 200, textAlign: "right" }}>
-          {fetchError}
+      {error && (
+        <span style={{ fontSize: 11, color: "#C0382B", fontFamily: FONT, maxWidth: 240, textAlign: "right", lineHeight: "1.3" }}>
+          {error}
         </span>
       )}
     </div>

@@ -13,7 +13,7 @@ interface AccountsContextValue {
   stamp: string;
   refresh: () => Promise<void>;
   onPlaidSuccess: (publicToken: string, institution?: { id?: string; name?: string }) => Promise<void>;
-  refreshLinkToken: () => Promise<void>;
+  refreshLinkToken: () => Promise<string | null>;
 }
 
 const AccountsContext = createContext<AccountsContextValue>({
@@ -24,7 +24,7 @@ const AccountsContext = createContext<AccountsContextValue>({
   stamp: "—",
   refresh: async () => {},
   onPlaidSuccess: async () => {},
-  refreshLinkToken: async () => {},
+  refreshLinkToken: async () => null,
 });
 
 export function AccountsProvider({ children }: { children: React.ReactNode }) {
@@ -34,12 +34,14 @@ export function AccountsProvider({ children }: { children: React.ReactNode }) {
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [stamp, setStamp] = useState("—");
 
-  const refreshLinkToken = useCallback(async () => {
+  const refreshLinkToken = useCallback(async (): Promise<string | null> => {
     try {
       const { link_token } = await createLinkToken();
       setLinkToken(link_token);
+      return link_token;
     } catch (e) {
-      console.warn("Link token fetch failed:", e);
+      console.error("Link token fetch failed:", e);
+      return null;
     }
   }, []);
 
