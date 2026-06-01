@@ -1,7 +1,17 @@
 // app/(app)/spending.web.tsx — Spending view with real Plaid data.
 // Features: month picker, category filter, inline categorization, unconfirmed indicators.
 
-import React, { useEffect, useState, useCallback, useMemo } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
+
+function useNarrow(bp = 640) {
+  const [narrow, setNarrow] = useState(typeof window !== "undefined" ? window.innerWidth < bp : false);
+  useEffect(() => {
+    const fn = () => setNarrow(window.innerWidth < bp);
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, [bp]);
+  return narrow;
+}
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import {
   fetchTransactions, syncTransactions, fetchTransactionRules,
@@ -59,6 +69,7 @@ function CategoryPickerPortal({ state, onCategorize, onClose }: {
 
 // ── Main spending screen ──────────────────────────────────────────────────────
 export default function SpendingScreen() {
+  const isMobile = useNarrow(640);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [rules, setRules] = useState<TransactionRule[]>([]);
   const [loading, setLoading] = useState(true);
@@ -217,7 +228,7 @@ export default function SpendingScreen() {
       </div>
 
       {/* ── Charts ─────────────────────────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: 20 }}>
           <div style={{ fontWeight: 600, fontSize: 15, color: T.fg, marginBottom: 4 }}>Monthly spending</div>
           <div style={{ fontSize: 12.5, color: T.fgMuted, marginBottom: 18 }}>Last {trendData.length} months</div>

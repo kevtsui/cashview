@@ -63,6 +63,18 @@ body > div, body > div > div { height: 100%; }
 
 /* Recharts override: remove outline on svg */
 .recharts-wrapper svg { outline: none; }
+
+/* Mobile: collapse 2-col grids to single column */
+@media (max-width: 640px) {
+  .cv-grid-2 { grid-template-columns: 1fr !important; }
+  .cv-grid-accounts { grid-template-columns: 1fr !important; }
+}
+
+/* Prevent iOS text size adjustment */
+html { -webkit-text-size-adjust: 100%; }
+
+/* Tap highlight removal on interactive elements */
+button, a { -webkit-tap-highlight-color: transparent; }
 `;
 
 export default function Root({ children }: PropsWithChildren) {
@@ -71,7 +83,8 @@ export default function Root({ children }: PropsWithChildren) {
       <head>
         <meta charSet="utf-8" />
         <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
-        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+        {/* viewport-fit=cover extends under iPhone notch; safe-area-inset-* push content clear */}
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover" />
         <title>CashView</title>
         {/* PWA support */}
         <link rel="manifest" href="/manifest.json" />

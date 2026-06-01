@@ -264,7 +264,9 @@ export default function ShellLayout({ children }: { children: React.ReactNode })
         <div
           style={{
             ...css.content,
-            padding: narrow ? 16 : "24px 32px 64px",
+            padding: narrow
+              ? `16px 16px max(24px, env(safe-area-inset-bottom))` as any
+              : "24px 32px 64px",
           }}
         >
           {children}
@@ -360,26 +362,35 @@ const css: Record<string, CSSObj> = {
     display: "flex",
     gap: 6,
     overflowX: "auto",
-    padding: "12px 16px",
+    // Safe area: push below notch on iPhone
+    paddingTop: "max(12px, env(safe-area-inset-top))" as any,
+    paddingBottom: 12,
+    paddingLeft: "max(16px, env(safe-area-inset-left))" as any,
+    paddingRight: "max(16px, env(safe-area-inset-right))" as any,
     borderBottom: `1px solid ${T.border}`,
     backgroundColor: T.bgRaised,
     position: "sticky",
     top: 0,
     zIndex: 5,
+    // Hide scrollbar on mobile tab bar
+    scrollbarWidth: "none" as any,
+    msOverflowStyle: "none" as any,
   },
   mobileTab: {
     display: "flex",
     alignItems: "center",
     gap: 7,
-    padding: "8px 13px",
+    // Bigger tap target on mobile
+    padding: "10px 14px",
     borderRadius: 999,
     whiteSpace: "nowrap",
     border: `1px solid ${T.border}`,
     fontWeight: 600,
-    fontSize: 13,
+    fontSize: 14,
     cursor: "pointer",
     fontFamily: FONT,
     flexShrink: 0,
+    minHeight: 44, // Apple HIG minimum tap target
   },
   main: {
     flex: 1,

@@ -404,9 +404,20 @@ function CardHead({ title, action }: { title: string; action?: React.ReactNode }
 }
 
 // ── Overview screen ───────────────────────────────────────────────────────────
+function useNarrow(bp = 640) {
+  const [narrow, setNarrow] = useState(typeof window !== "undefined" ? window.innerWidth < bp : false);
+  useEffect(() => {
+    const fn = () => setNarrow(window.innerWidth < bp);
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, [bp]);
+  return narrow;
+}
+
 export default function OverviewScreen() {
   const { accounts } = useAccounts();
   const router = useRouter();
+  const isMobile = useNarrow(640);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [txLoading, setTxLoading] = useState(true);
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
@@ -478,7 +489,7 @@ export default function OverviewScreen() {
       )}
 
       {/* ── Chart row ──────────────────────────────────────────────────────── */}
-      <div style={{ display: accounts.length === 0 ? "none" : "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16, alignItems: "stretch" }}>
+      <div style={{ display: accounts.length === 0 ? "none" : "grid", gridTemplateColumns: isMobile ? "1fr" : "1.6fr 1fr", gap: 16, alignItems: "stretch" }}>
 
         {/* Net worth — real chart when snapshots exist, breakdown otherwise */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: 20, display: "flex", flexDirection: "column" }}>
@@ -550,7 +561,7 @@ export default function OverviewScreen() {
       </div>
 
       {/* ── Lower row ──────────────────────────────────────────────────────── */}
-      <div style={{ display: accounts.length === 0 ? "none" : "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
+      <div style={{ display: accounts.length === 0 ? "none" : "grid", gridTemplateColumns: isMobile ? "1fr" : "1.4fr 1fr", gap: 16 }}>
 
         {/* Accounts */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, overflow: "hidden" }}>

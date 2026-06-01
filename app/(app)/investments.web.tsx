@@ -1,6 +1,16 @@
 // app/(app)/investments.web.tsx — Investments view using live Plaid balance data.
 
 import React, { useEffect, useState } from "react";
+
+function useNarrow(bp = 640) {
+  const [narrow, setNarrow] = useState(typeof window !== "undefined" ? window.innerWidth < bp : false);
+  useEffect(() => {
+    const fn = () => setNarrow(window.innerWidth < bp);
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, [bp]);
+  return narrow;
+}
 import { PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { useAccounts } from "@/lib/AccountsContext";
 import { fetchSnapshots, NetWorthSnapshot } from "@/lib/api";
@@ -24,6 +34,7 @@ function CardHead({ title, action }: { title: string; action?: React.ReactNode }
 const ALLOC_COLORS = ["#3C8C7E", "#E5634A", "#D99A22", "#7A716A"];
 
 export default function InvestmentsScreen() {
+  const isMobile = useNarrow(640);
   const { accounts, loading } = useAccounts();
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
 
@@ -79,7 +90,7 @@ export default function InvestmentsScreen() {
     <div style={{ display: "flex", flexDirection: "column", gap: 16, fontFamily: FONT }}>
 
       {/* ── Top row: total + allocation ────────────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: 16 }}>
 
         {/* Total invested card */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: 20, display: "flex", flexDirection: "column" }}>
