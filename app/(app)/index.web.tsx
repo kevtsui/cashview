@@ -29,45 +29,59 @@ function institutionName(acct: Account): string {
   return "Chase";
 }
 
-// ── Recurring bill detection ──────────────────────────────────────────────────
-// Finds merchants that appear in BOTH the last 30 days AND the prior 30 days
-// (i.e. they're likely monthly). Projects the next due date ~30 days after
-// the most recent occurrence.
+// ── Recurring bill detection (6-month window) ────────────────────────────────
+// Requirements to be considered a bill:
+//   1. Amount ≥ $15 (filters out coffee, small purchases)
+//   2. Merchant appears in 3+ distinct calendar months
+//   3. Amounts are consistent (within 20% of median)
+//   4. Next due date projected from the day-of-month pattern
 function detectRecurringBills(txs: Transaction[]) {
-  const now = Date.now();
-  const recent  = txs.filter((t) => t.amount > 0 && now - new Date(t.date + "T12:00:00").getTime() < 30 * 86400_000);
-  const prior   = txs.filter((t) => t.amount > 0 && now - new Date(t.date + "T12:00:00").getTime() >= 30 * 86400_000);
+  const debits = txs.filter((t) => t.amount >= 15);
 
-  const priorMerchants = new Set(prior.map((t) => t.merchant_name ?? t.name));
-
-  // Candidates: appeared recently AND in the prior period
-  const candidates = recent.filter((t) => priorMerchants.has(t.merchant_name ?? t.name));
-
-  // Deduplicate by merchant, keep latest occurrence
-  const byMerchant: Record<string, Transaction> = {};
-  for (const tx of candidates) {
-    const key = tx.merchant_name ?? tx.name;
-    if (!byMerchant[key] || tx.date > byMerchant[key].date) {
-      byMerchant[key] = tx;
-    }
+  // Group by merchant name
+  const byMerchant: Record<string, Transaction[]> = {};
+  for (const tx of debits) {
+    const key = (tx.merchant_name ?? tx.name).trim();
+    if (!byMerchant[key]) byMerchant[key] = [];
+    byMerchant[key].push(tx);
   }
 
-  // Project next due date = last date + ~30 days
-  return Object.values(byMerchant)
-    .map((tx) => {
-      const lastDate = new Date(tx.date + "T12:00:00");
-      const nextDate = new Date(lastDate.getTime() + 30 * 86400_000);
-      return {
-        id: tx.id,
-        label: tx.merchant_name ?? tx.name,
-        amt: tx.amount,
-        dueDate: nextDate,
-        daysUntil: Math.round((nextDate.getTime() - now) / 86400_000),
-      };
-    })
-    .filter((b) => b.daysUntil >= -3 && b.daysUntil <= 45) // within window
-    .sort((a, b) => a.daysUntil - b.daysUntil)
-    .slice(0, 5);
+  const now = Date.now();
+  const bills: { id: string; label: string; amt: number; dueDate: Date; daysUntil: number }[] = [];
+
+  for (const [name, group] of Object.entries(byMerchant)) {
+    // Distinct calendar months
+    const months = new Set(group.map((t) => t.date.slice(0, 7)));
+    if (months.size < 3) continue; // need 3+ months
+
+    // Check amount consistency (within 20% of median)
+    const amounts = group.map((t) => t.amount).sort((a, b) => a - b);
+    const median = amounts[Math.floor(amounts.length / 2)];
+    const consistent = amounts.every((a) => Math.abs(a - median) / median < 0.20);
+    if (!consistent) continue;
+
+    // Find the most common day-of-month
+    const days = group.map((t) => new Date(t.date + "T12:00:00").getDate());
+    const dayFreq: Record<number, number> = {};
+    for (const d of days) dayFreq[d] = (dayFreq[d] ?? 0) + 1;
+    const typicalDay = parseInt(Object.entries(dayFreq).sort((a, b) => b[1] - a[1])[0][0]);
+
+    // Project next occurrence: next month at typical day
+    const today = new Date();
+    let next = new Date(today.getFullYear(), today.getMonth(), typicalDay);
+    if (next.getTime() < now - 3 * 86400_000) {
+      next = new Date(today.getFullYear(), today.getMonth() + 1, typicalDay);
+    }
+    const daysUntil = Math.round((next.getTime() - now) / 86400_000);
+
+    // Only show within next 45 days or up to 3 days overdue
+    if (daysUntil < -3 || daysUntil > 45) continue;
+
+    const latest = group.sort((a, b) => b.date.localeCompare(a.date))[0];
+    bills.push({ id: latest.id.toString(), label: name, amt: median, dueDate: next, daysUntil });
+  }
+
+  return bills.sort((a, b) => a.daysUntil - b.daysUntil).slice(0, 6);
 }
 
 function UpcomingBillsFromTx({ transactions, loading }: { transactions: Transaction[]; loading: boolean }) {
@@ -156,8 +170,8 @@ export default function OverviewScreen() {
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
 
   useEffect(() => {
-    // Fetch 60 days so recurring bill detection can compare this month vs last month
-    fetchTransactions(60)
+    // Fetch 180 days (6 months) for reliable recurring bill detection
+    fetchTransactions(180)
       .then(setTransactions)
       .catch(console.error)
       .finally(() => setTxLoading(false));
