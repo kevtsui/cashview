@@ -214,13 +214,17 @@ export async function categorizeTransaction(tx: Transaction, categoryKey: string
     confirmed: true,
   }).eq("id", tx.id);
 
-  // 2. Upsert the rule
-  await supabase.from("transaction_rules").upsert({
-    merchant_pattern: pattern,
-    category_key: categoryKey,
-    category_label: categoryLabel,
-    color,
-  }, { onConflict: "household_id,merchant_pattern" });
+  // 2. Upsert the rule (must include household_id — it's NOT NULL)
+  const household_id = await getHouseholdId();
+  if (household_id) {
+    await supabase.from("transaction_rules").upsert({
+      household_id,
+      merchant_pattern: pattern,
+      category_key: categoryKey,
+      category_label: categoryLabel,
+      color,
+    }, { onConflict: "household_id,merchant_pattern" });
+  }
 
   // 3. Apply rule to all unconfirmed transactions with the same merchant pattern
   // We do this by fetching matching transactions and updating them
@@ -254,9 +258,17 @@ export async function confirmTransaction(txId: string): Promise<void> {
 
 const T_BG_MUTED = "#BDB5AC";
 
+async function getHouseholdId(): Promise<string | null> {
+  const { data } = await supabase.from("profiles").select("household_id").single();
+  return (data as any)?.household_id ?? null;
+}
+
 // Exclude a merchant from recurring spend analysis
 export async function excludeRecurring(merchantPattern: string): Promise<void> {
-  await supabase.from("transaction_rules").upsert({
+  const household_id = await getHouseholdId();
+  if (!household_id) throw new Error("No household found");
+  const { error } = await supabase.from("transaction_rules").upsert({
+    household_id,
     merchant_pattern: merchantPattern,
     category_key: "OTHER",
     category_label: "Other",
@@ -264,16 +276,20 @@ export async function excludeRecurring(merchantPattern: string): Promise<void> {
     exclude_recurring: true,
     force_recurring: false,
   }, { onConflict: "household_id,merchant_pattern" });
+  if (error) throw error;
 }
 
 // Force-include a merchant in recurring spend analysis with explicit cadence + amount
 export async function includeRecurring(params: {
   merchantPattern: string;
   label: string;
-  cadence: string;       // "weekly" | "monthly" | "bimonthly" | "quarterly"
+  cadence: string;
   amount: number;
 }): Promise<void> {
-  await supabase.from("transaction_rules").upsert({
+  const household_id = await getHouseholdId();
+  if (!household_id) throw new Error("No household found");
+  const { error } = await supabase.from("transaction_rules").upsert({
+    household_id,
     merchant_pattern: params.merchantPattern,
     category_key: "OTHER",
     category_label: "Other",
@@ -283,6 +299,7 @@ export async function includeRecurring(params: {
     forced_cadence: params.cadence,
     forced_amount: params.amount,
   }, { onConflict: "household_id,merchant_pattern" });
+  if (error) throw error;
 }
 
 // ── Category helpers ────────────────────────────────────────────────────────
