@@ -33,12 +33,24 @@ function institutionName(acct: Account): string {
 function normalizeName(tx: Transaction): string {
   const raw = tx.merchant_name ?? tx.name;
   return raw
+    // ACH type codes and everything after
     .replace(/\s+(PPD|WEB|CCD|TEL|ACH)\s+.*$/i, "")
-    .replace(/\s+ID[:\s]+[\w\d\-]+/gi, "")
+    // Reference / ID codes
+    .replace(/\s+ID[:\s#]+[\w\d\-]+/gi, "")
+    .replace(/\s+REF[:\s#]+[\w\d]+/gi, "")
+    .replace(/\s+#[\d\-]+/g, "")
+    // Payment numbers
     .replace(/\s+PMT\s+#?[\d\-]+/gi, "")
-    .replace(/\s+\*[\w\d]+$/i, "")
-    .replace(/\s+REF[\s:#]+[\w\d]+/gi, "")
-    .replace(/\s+\d{6,}$/g, "")
+    // Transfer "TO/FROM account" patterns — strips account refs like "TO CHK 1234", "FROM SAV 5678"
+    .replace(/\s+(TO|FROM)\s+(CHK|SAV|CHECKING|SAVINGS|ACCT|ACCOUNT|DDA)\s*[\d\*x]+/gi, "")
+    .replace(/\s+(TO|FROM)\s+[\*x\d]{4,}/gi, "")
+    // Online transfer routing numbers
+    .replace(/\s+\d{4,}/g, "")          // strip trailing 4+ digit numbers
+    .replace(/\s+\*[\w\d]+$/i, "")      // strip * codes
+    // Normalize Zelle / Venmo recipient names to the service only
+    // (keeps "Zelle payment" without the person, since recipient may vary)
+    .replace(/(zelle\s+payment\s+to)\s+.+$/i, "Zelle payment")
+    .replace(/(venmo\s+payment\s+to)\s+.+$/i, "Venmo payment")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -95,10 +107,11 @@ function analyzeRecurringSpend(txs: Transaction[]): { items: RecurringItem[]; to
     else if (avgGap <= 105) { cadence = "quarterly";  monthlyMultiplier = 0.33; }
     else continue; // too infrequent / one-off
 
-    // Gap regularity check — if gaps are wildly inconsistent it's not a cadence
+    // Gap regularity check — skip if timing is wildly inconsistent
+    // (transfers can shift ±5 days, so allow up to 70% CV)
     if (gaps.length > 1) {
       const gapStdDev = Math.sqrt(gaps.reduce((s, g) => s + (g - avgGap) ** 2, 0) / gaps.length);
-      if (gapStdDev / avgGap > 0.6) continue; // >60% coefficient of variation = not regular
+      if (gapStdDev / avgGap > 0.7) continue;
     }
 
     // Amount stats
