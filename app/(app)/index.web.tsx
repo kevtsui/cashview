@@ -6,11 +6,12 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "expo-router";
 import { useAccounts } from "@/lib/AccountsContext";
-import { fetchTransactions, categoryMeta, Transaction } from "@/lib/api";
+import { fetchTransactions, fetchSnapshots, categoryMeta, Transaction, NetWorthSnapshot } from "@/lib/api";
 import { T } from "@/lib/tokens";
 import Money from "@/components/shared/Money";
 import Icon from "@/components/shared/Icon";
 import SpendingDonut from "@/components/overview/SpendingDonut";
+import NetWorthChart from "@/components/overview/NetWorthChart";
 import InstMark from "@/components/shared/InstMark";
 import type { Account } from "@/types/database";
 
@@ -152,13 +153,14 @@ export default function OverviewScreen() {
   const router = useRouter();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [txLoading, setTxLoading] = useState(true);
+  const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
 
-  // Fetch this month's transactions for spending donut
   useEffect(() => {
     fetchTransactions(30)
       .then(setTransactions)
       .catch(console.error)
       .finally(() => setTxLoading(false));
+    fetchSnapshots(365).then(setSnapshots).catch(console.error);
   }, []);
 
   // ── Live KPI totals from Plaid ──────────────────────────────────────────────
@@ -211,31 +213,47 @@ export default function OverviewScreen() {
       {/* ── Chart row ──────────────────────────────────────────────────────── */}
       <div style={{ display: accounts.length === 0 ? "none" : "grid", gridTemplateColumns: "1.6fr 1fr", gap: 16, alignItems: "stretch" }}>
 
-        {/* Net worth — historical chart needs snapshots; show current value for now */}
+        {/* Net worth — real chart when snapshots exist, breakdown otherwise */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: 20, display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexShrink: 0 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: snapshots.length > 1 ? 6 : 20, flexShrink: 0 }}>
             <div>
               <div style={{ fontWeight: 600, fontSize: 15, color: T.fg }}>Net worth</div>
-              <div style={{ fontSize: 12.5, color: T.fgMuted, marginTop: 2 }}>Current snapshot</div>
+              <div style={{ fontSize: 12.5, color: T.fgMuted, marginTop: 2 }}>
+                {snapshots.length > 1 ? `Last ${snapshots.length} days` : "Current snapshot"}
+              </div>
             </div>
           </div>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, minHeight: 180, padding: "0 24px 16px" }}>
-            <Money value={netWorth} size={42} weight={700} cents={false} />
-            <div style={{ display: "flex", gap: 24, fontSize: 13.5, flexWrap: "wrap", justifyContent: "center" }}>
-              <span style={{ color: T.fgMuted }}>Cash <span style={{ color: T.fg, fontWeight: 600 }}>
-                {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(cash)}
-              </span></span>
-              <span style={{ color: T.fgMuted }}>Investments <span style={{ color: T.invest, fontWeight: 600 }}>
-                {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(invest)}
-              </span></span>
-              <span style={{ color: T.fgMuted }}>Debt <span style={{ color: T.negative, fontWeight: 600 }}>
-                {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Math.abs(debt))}
-              </span></span>
+
+          {snapshots.length > 1 ? (
+            // Real chart from accumulated snapshots
+            <div style={{ flex: 1, minHeight: 180 }}>
+              <NetWorthChart
+                series={snapshots.map((s) => ({
+                  month: new Date(s.captured_at + "T12:00:00").toLocaleString("en-US", { month: "short", day: "numeric" }),
+                  value: s.net_worth,
+                }))}
+              />
             </div>
-            <div style={{ fontSize: 12, color: T.fgSubtle, textAlign: "center", marginTop: 8 }}>
-              Historical trend chart will appear once daily snapshots accumulate.
+          ) : (
+            // Not enough data yet — show current breakdown
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, minHeight: 180, padding: "0 24px 16px" }}>
+              <Money value={netWorth} size={42} weight={700} cents={false} />
+              <div style={{ display: "flex", gap: 20, fontSize: 13, flexWrap: "wrap", justifyContent: "center" }}>
+                <span style={{ color: T.fgMuted }}>Cash <strong style={{ color: T.fg }}>
+                  {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(cash)}
+                </strong></span>
+                <span style={{ color: T.fgMuted }}>Invest <strong style={{ color: T.invest }}>
+                  {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(invest)}
+                </strong></span>
+                <span style={{ color: T.fgMuted }}>Debt <strong style={{ color: T.negative }}>
+                  {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(Math.abs(debt))}
+                </strong></span>
+              </div>
+              <div style={{ fontSize: 11.5, color: T.fgSubtle, textAlign: "center" }}>
+                Trend chart builds automatically — each Refresh captures today's snapshot.
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Spending donut — real transactions or prompt to sync */}

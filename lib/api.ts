@@ -137,6 +137,28 @@ export interface Goal {
   updated_at: string;
 }
 
+// ── Net worth snapshots ─────────────────────────────────────────────────────
+export interface NetWorthSnapshot {
+  id: string;
+  household_id: string;
+  cash: number;
+  invest: number;
+  debt: number;
+  net_worth: number;
+  captured_at: string;
+}
+
+export async function fetchSnapshots(days = 365): Promise<NetWorthSnapshot[]> {
+  const since = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from("net_worth_snapshots")
+    .select("*")
+    .gte("captured_at", since)
+    .order("captured_at", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
 // ── Category helpers ────────────────────────────────────────────────────────
 export const CATEGORY_META: Record<string, { label: string; color: string }> = {
   FOOD_AND_DRINK:            { label: "Food & Drink",   color: "#E5634A" },

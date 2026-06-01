@@ -140,13 +140,32 @@ serve(async (req) => {
     );
 
     // ── 5. Return fresh accounts from DB ────────────────────────────────────
-    // Re-query so the client gets the canonical stored values
     const { data: freshAccounts } = await adminClient
       .from("accounts")
       .select("*")
       .eq("household_id", profile.household_id)
       .order("type")
       .order("name");
+
+    // ── 6. Write a net-worth snapshot (one per day, upsert) ──────────────────
+    if (freshAccounts && freshAccounts.length > 0) {
+      const sum = (types: string[]) =>
+        freshAccounts.filter((a: Record<string, unknown>) => types.includes(a.type as string))
+          .reduce((s: number, a: Record<string, unknown>) => s + ((a.current_balance as number) ?? 0), 0);
+
+      const cash   = sum(["depository", "checking", "savings"]);
+      const invest = sum(["investment", "brokerage"]);
+      const debt   = Math.abs(sum(["credit"]));
+
+      await adminClient.from("net_worth_snapshots").upsert({
+        household_id: profile.household_id,
+        cash,
+        invest,
+        debt,
+        net_worth: cash + invest - debt,
+        captured_at: new Date().toISOString().slice(0, 10),
+      }, { onConflict: "household_id,captured_at" });
+    }
 
     const errors = syncResults
       .filter((r) => r.status === "fulfilled" && r.value.error)
