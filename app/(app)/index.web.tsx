@@ -156,7 +156,8 @@ export default function OverviewScreen() {
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
 
   useEffect(() => {
-    fetchTransactions(30)
+    // Fetch 60 days so recurring bill detection can compare this month vs last month
+    fetchTransactions(60)
       .then(setTransactions)
       .catch(console.error)
       .finally(() => setTxLoading(false));
@@ -179,8 +180,9 @@ export default function OverviewScreen() {
     .filter((a) => a.type !== "credit")
     .slice(0, 5);
 
-  // ── Real spending categories from transactions ──────────────────────────────
-  const debitTx = transactions.filter((t) => t.amount > 0);
+  // ── Real spending categories — this month only ──────────────────────────────
+  const thisMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const debitTx = transactions.filter((t) => t.amount > 0 && t.date.startsWith(thisMonth));
   const totalSpent = debitTx.reduce((s, t) => s + t.amount, 0);
   const catMap: Record<string, { id: string; label: string; color: string; spent: number; budget: number }> = {};
   for (const tx of debitTx) {
