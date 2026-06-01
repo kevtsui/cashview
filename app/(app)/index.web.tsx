@@ -3,7 +3,7 @@
 // Net worth chart and sparklines require historical snapshots — shown as
 // coming-soon until we have multiple data points.
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useRouter } from "expo-router";
 import { useAccounts } from "@/lib/AccountsContext";
 import { fetchTransactions, fetchSnapshots, fetchTransactionRules, excludeRecurring, categoryMeta, Transaction, NetWorthSnapshot, TransactionRule } from "@/lib/api";

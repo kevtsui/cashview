@@ -248,6 +248,8 @@ export async function confirmTransaction(txId: string): Promise<void> {
   await supabase.from("transactions").update({ confirmed: true }).eq("id", txId);
 }
 
+const T_BG_MUTED = "#BDB5AC";
+
 // Exclude a merchant from recurring spend analysis
 export async function excludeRecurring(merchantPattern: string): Promise<void> {
   await supabase.from("transaction_rules").upsert({
@@ -271,8 +273,6 @@ export async function includeRecurring(merchantPattern: string, label: string, a
     force_recurring: true,
   }, { onConflict: "household_id,merchant_pattern" });
 }
-
-const T_BG_MUTED = "#BDB5AC";
 
 // ── Category helpers ────────────────────────────────────────────────────────
 export const CATEGORY_META: Record<string, { label: string; color: string }> = {
