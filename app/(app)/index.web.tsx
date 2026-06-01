@@ -90,21 +90,15 @@ export default function OverviewScreen() {
   const { accounts } = useAccounts();
   const router = useRouter();
 
-  const haslive = accounts.length > 0;
-
-  const cashLive = accounts
+  const cash = accounts
     .filter((a) => ["depository", "checking", "savings"].includes(a.type ?? ""))
     .reduce((s, a) => s + (a.current_balance ?? 0), 0);
-  const investLive = accounts
+  const invest = accounts
     .filter((a) => ["investment", "brokerage"].includes(a.type ?? ""))
     .reduce((s, a) => s + (a.current_balance ?? 0), 0);
-  const debtLive = accounts
+  const debt = accounts
     .filter((a) => a.type === "credit")
     .reduce((s, a) => s + (a.current_balance ?? 0), 0);
-
-  const cash    = haslive ? cashLive    : 84870;
-  const invest  = haslive ? investLive  : 280631;
-  const debt    = haslive ? debtLive    : -3284;
   const netWorth = cash + invest - Math.abs(debt);
 
   const displayAccounts = accounts
