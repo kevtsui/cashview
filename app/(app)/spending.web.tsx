@@ -41,6 +41,7 @@ export default function SpendingScreen() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -148,7 +149,7 @@ export default function SpendingScreen() {
           </ResponsiveContainer>
         </div>
 
-        {/* Spending donut */}
+        {/* Spending donut — clickable */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, padding: 20 }}>
           <div style={{ fontWeight: 600, fontSize: 15, color: T.fg, marginBottom: 16 }}>By category</div>
           <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
@@ -156,7 +157,9 @@ export default function SpendingScreen() {
               <>
                 <div style={{ position: "relative", flexShrink: 0 }}>
                   <PieChart width={140} height={140}>
-                    <Pie data={catData} cx={65} cy={65} innerRadius={42} outerRadius={65} dataKey="total" strokeWidth={0} paddingAngle={2}>
+                    <Pie data={catData} cx={65} cy={65} innerRadius={42} outerRadius={65} dataKey="total" strokeWidth={0} paddingAngle={2}
+                      onClick={(d) => setSelectedCategory(d.id)}
+                      style={{ cursor: "pointer" }}>
                       {catData.map((c, i) => <Cell key={i} fill={c.color} />)}
                     </Pie>
                   </PieChart>
@@ -167,10 +170,13 @@ export default function SpendingScreen() {
                 </div>
                 <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 7 }}>
                   {catData.slice(0, 5).map((c) => (
-                    <div key={c.label} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5 }}>
+                    <div key={c.label} onClick={() => setSelectedCategory(c.id)} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: "pointer", padding: "2px 4px", margin: "-2px -4px", borderRadius: 6, transition: "background 120ms" }}
+                      onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = T.bgChip}
+                      onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = "transparent"}>
                       <span style={{ width: 8, height: 8, borderRadius: 2, background: c.color, flexShrink: 0 }} />
                       <span style={{ flex: 1, color: T.fg }}>{c.label}</span>
                       <span style={{ color: T.fgMuted, fontVariantNumeric: "tabular-nums" }}>{formatMoney(c.total, false)}</span>
+                      <span style={{ fontSize: 11, color: T.fgSubtle }}>→</span>
                     </div>
                   ))}
                 </div>
@@ -181,6 +187,50 @@ export default function SpendingScreen() {
           </div>
         </div>
       </div>
+
+      {/* Category drill-down modal */}
+      {selectedCategory && (() => {
+        const cat = catData.find((c) => c.id === selectedCategory);
+        const catTxs = monthTx.filter((t) => (t.personal_finance_category ?? "OTHER") === selectedCategory).sort((a, b) => b.date.localeCompare(a.date));
+        const meta = categoryMeta(selectedCategory);
+        return (
+          <div onClick={() => setSelectedCategory(null)} style={{ position: "fixed", inset: 0, background: "rgba(22,17,14,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, width: 520, maxWidth: "calc(100vw - 32px)", maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(22,17,14,.14)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${T.borderSubtle}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ width: 12, height: 12, borderRadius: 3, background: meta.color, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 16, color: T.fg, fontFamily: FONT }}>{cat?.label ?? selectedCategory}</div>
+                    <div style={{ fontSize: 12.5, color: T.fgMuted, marginTop: 1, fontFamily: FONT }}>{catTxs.length} transactions</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                  <span style={{ fontWeight: 700, fontSize: 15, color: T.fg, fontVariantNumeric: "tabular-nums" }}>{formatMoney(cat?.total ?? 0, false)}</span>
+                  <button onClick={() => setSelectedCategory(null)} style={{ background: "none", border: "none", fontSize: 22, color: T.fgMuted, cursor: "pointer", lineHeight: 1 }}>×</button>
+                </div>
+              </div>
+              <div style={{ overflowY: "auto", flex: 1 }}>
+                {catTxs.map((tx, i) => {
+                  const displayName = tx.merchant_name ?? tx.name;
+                  const dateLabel = new Date(tx.date + "T12:00:00").toLocaleString("en-US", { month: "short", day: "numeric" });
+                  return (
+                    <div key={tx.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderTop: i ? `1px solid ${T.borderSubtle}` : "none" }}>
+                      <div style={{ width: 34, height: 34, borderRadius: 9, background: meta.color + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: meta.color }}>{displayName.slice(0, 2).toUpperCase()}</span>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13.5, color: T.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
+                        <div style={{ fontSize: 12, color: T.fgMuted, marginTop: 1 }}>{dateLabel}</div>
+                      </div>
+                      <Money value={-tx.amount} size={14} weight={600} cents />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Transaction list ────────────────────────────────────────────────── */}
       <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, overflow: "hidden" }}>

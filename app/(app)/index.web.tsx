@@ -234,6 +234,7 @@ export default function OverviewScreen() {
   const [txLoading, setTxLoading] = useState(true);
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
   const [showAllBills, setShowAllBills] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   useEffect(() => {
     // Fetch 365 days (12 months) for reliable recurring spend analysis
@@ -347,7 +348,11 @@ export default function OverviewScreen() {
           {txLoading ? (
             <div style={{ height: 200, display: "flex", alignItems: "center", justifyContent: "center", color: T.fgMuted, fontSize: 13 }}>Loading…</div>
           ) : hasTransactions ? (
-            <SpendingDonut categories={realCategories} total={totalSpent} />
+            <SpendingDonut
+            categories={realCategories}
+            total={totalSpent}
+            onCategoryClick={(id) => setSelectedCategory(id)}
+          />
           ) : (
             <div style={{ height: 200, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12 }}>
               <Icon name="pie-chart" size={32} color={T.borderSubtle} />
@@ -421,6 +426,51 @@ export default function OverviewScreen() {
             </div>
           </div>
         )}
+
+      {/* Category drill-down modal */}
+      {selectedCategory && (() => {
+        const cat = realCategories.find((c) => c.id === selectedCategory);
+        const catTxs = debitTx
+          .filter((t) => (t.personal_finance_category ?? "OTHER") === selectedCategory)
+          .sort((a, b) => b.date.localeCompare(a.date));
+        return (
+          <div onClick={() => setSelectedCategory(null)} style={{ position: "fixed", inset: 0, background: "rgba(22,17,14,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, width: 520, maxWidth: "calc(100vw - 32px)", maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(22,17,14,.14)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${T.borderSubtle}` }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span style={{ width: 12, height: 12, borderRadius: 3, background: cat?.color ?? T.fgMuted, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 16, color: T.fg, fontFamily: FONT }}>{cat?.label ?? selectedCategory}</div>
+                    <div style={{ fontSize: 12.5, color: T.fgMuted, marginTop: 1, fontFamily: FONT }}>{catTxs.length} transactions · last 30 days</div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+                  <Money value={-(cat?.spent ?? 0)} size={16} weight={700} cents={false} />
+                  <button onClick={() => setSelectedCategory(null)} style={{ background: "none", border: "none", fontSize: 22, color: T.fgMuted, cursor: "pointer", lineHeight: 1 }}>×</button>
+                </div>
+              </div>
+              <div style={{ overflowY: "auto", flex: 1 }}>
+                {catTxs.map((tx, i) => {
+                  const displayName = tx.merchant_name ?? tx.name;
+                  const dateLabel = new Date(tx.date + "T12:00:00").toLocaleString("en-US", { month: "short", day: "numeric" });
+                  return (
+                    <div key={tx.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 20px", borderTop: i ? `1px solid ${T.borderSubtle}` : "none" }}>
+                      <div style={{ width: 34, height: 34, borderRadius: 9, background: (cat?.color ?? T.fgMuted) + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: cat?.color ?? T.fgMuted }}>{displayName.slice(0, 2).toUpperCase()}</span>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 600, fontSize: 13.5, color: T.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
+                        <div style={{ fontSize: 12, color: T.fgMuted, marginTop: 1 }}>{dateLabel}</div>
+                      </div>
+                      <Money value={-tx.amount} size={14} weight={600} cents />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
       </div>
     </div>
   );

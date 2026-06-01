@@ -107,40 +107,59 @@ serve(async (req) => {
     let totalSynced = 0;
 
     await Promise.all(items.map(async (item) => {
-      const { data: txData, ok } = await plaidPost("/transactions/get", {
-        access_token: item.access_token,
-        start_date:   start,
-        end_date:     end,
-        options: { count: 500, offset: 0, include_personal_finance_category: true },
-      });
-      if (!ok) {
-        console.error(`Transactions fetch failed for item ${item.id}:`, txData.error_message);
-        return;
+      // ── Paginate through ALL transactions (Plaid caps at 500 per request) ──
+      let offset = 0;
+      let totalAvailable = Infinity;
+      const allTxRows: Record<string, unknown>[] = [];
+
+      while (offset < totalAvailable) {
+        const { data: txData, ok } = await plaidPost("/transactions/get", {
+          access_token: item.access_token,
+          start_date:   start,
+          end_date:     end,
+          options: { count: 500, offset, include_personal_finance_category: true },
+        });
+
+        if (!ok) {
+          console.error(`Transactions fetch failed for item ${item.id}:`, txData.error_message);
+          break;
+        }
+
+        totalAvailable = txData.total_transactions ?? 0;
+        const batch = txData.transactions ?? [];
+        if (batch.length === 0) break;
+
+        for (const tx of batch) {
+          const { primary, label } = categorize(tx as Record<string, unknown>);
+          allTxRows.push({
+            household_id:              profile.household_id,
+            plaid_account_id:          (tx as Record<string, unknown>).account_id as string,
+            plaid_transaction_id:      (tx as Record<string, unknown>).transaction_id as string,
+            merchant_name:             ((tx as Record<string, unknown>).merchant_name as string | null) ?? null,
+            name:                      (tx as Record<string, unknown>).name as string,
+            personal_finance_category: primary,
+            category_primary:          label,
+            amount:                    (tx as Record<string, unknown>).amount as number,
+            date:                      (tx as Record<string, unknown>).date as string,
+            pending:                   (tx as Record<string, unknown>).pending as boolean,
+            currency_code:             ((tx as Record<string, unknown>).iso_currency_code as string | null) ?? "USD",
+          });
+        }
+
+        offset += batch.length;
+        console.log(`Item ${item.id}: fetched ${offset}/${totalAvailable} transactions`);
       }
 
-      const rows = (txData.transactions ?? []).map((tx: Record<string, unknown>) => {
-        const { primary, label } = categorize(tx);
-        return {
-          household_id:              profile.household_id,
-          plaid_account_id:          tx.account_id as string,
-          plaid_transaction_id:      tx.transaction_id as string,
-          merchant_name:             (tx.merchant_name as string | null) ?? null,
-          name:                      tx.name as string,
-          personal_finance_category: primary,
-          category_primary:          label,
-          amount:                    tx.amount as number, // Plaid: positive=debit
-          date:                      tx.date as string,
-          pending:                   tx.pending as boolean,
-          currency_code:             (tx.iso_currency_code as string | null) ?? "USD",
-        };
-      });
-
-      if (rows.length > 0) {
-        const { error } = await adminClient
-          .from("transactions")
-          .upsert(rows, { onConflict: "plaid_transaction_id" });
-        if (error) console.error("Upsert error:", error);
-        else totalSynced += rows.length;
+      if (allTxRows.length > 0) {
+        // Upsert in chunks of 500 to avoid payload limits
+        for (let i = 0; i < allTxRows.length; i += 500) {
+          const chunk = allTxRows.slice(i, i + 500);
+          const { error } = await adminClient
+            .from("transactions")
+            .upsert(chunk, { onConflict: "plaid_transaction_id" });
+          if (error) console.error("Upsert error:", error);
+          else totalSynced += chunk.length;
+        }
       }
     }));
 
