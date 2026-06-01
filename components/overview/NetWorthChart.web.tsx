@@ -6,6 +6,7 @@ import {
 } from "recharts";
 import type { SeriesPoint } from "@/lib/data";
 import { formatCompact } from "@/components/shared/Money";
+import { T } from "@/lib/tokens";
 
 interface NetWorthChartProps {
   series: SeriesPoint[];
@@ -23,12 +24,12 @@ function CustomTooltip({ active, payload, label }: any) {
 
 export default function NetWorthChart({ series }: NetWorthChartProps) {
   return (
-    <ResponsiveContainer width="100%" height={180}>
+    <ResponsiveContainer width="100%" height="100%" minHeight={180}>
       <AreaChart data={series} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id="nwGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="5%"  stopColor="var(--invest)" stopOpacity={0.18} />
-            <stop offset="95%" stopColor="var(--invest)" stopOpacity={0}    />
+            <stop offset="5%"  stopColor={T.invest} stopOpacity={0.28} />
+            <stop offset="95%" stopColor={T.invest} stopOpacity={0.04} />
           </linearGradient>
         </defs>
         <CartesianGrid vertical={false} stroke="var(--border-subtle)" strokeDasharray="3 3" />
@@ -44,6 +45,7 @@ export default function NetWorthChart({ series }: NetWorthChartProps) {
           axisLine={false}
           tickLine={false}
           width={52}
+          domain={["auto", "auto"]}
         />
         <Tooltip content={<CustomTooltip />} cursor={{ stroke: "var(--border)", strokeWidth: 1 }} />
         <Area

@@ -1,7 +1,9 @@
-// components/overview/KpiCard.web.tsx — Web KPI card matching the design reference.
-// Renders the $ as a small superscript beside the large tabular number.
+// components/overview/KpiCard.web.tsx — KPI card matching the design reference.
+// Uses the split-$ Money component and Badge for delta — exactly as in the prototype.
 
 import React from "react";
+import Money from "@/components/shared/Money";
+import { T } from "@/lib/tokens";
 
 interface KpiCardProps {
   label: string;
@@ -13,21 +15,12 @@ interface KpiCardProps {
   cents?: boolean;
 }
 
-const DELTA_COLORS = {
-  positive: "var(--positive)",
-  negative: "var(--negative)",
-  invest:   "var(--invest)",
-  neutral:  "var(--fg-muted)",
+const BADGE_TONES: Record<string, { bg: string; color: string }> = {
+  positive: { bg: T.positiveSoft, color: T.positive  },
+  negative: { bg: T.negativeSoft, color: T.negative  },
+  invest:   { bg: T.investSoft,   color: T.invest    },
+  neutral:  { bg: T.bgChip,       color: T.fgMuted   },
 };
-
-function formatNumber(value: number, cents: boolean): { sign: string; abs: string } {
-  const sign = value < 0 ? "−" : "";
-  const abs = new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: cents ? 2 : 0,
-    maximumFractionDigits: cents ? 2 : 0,
-  }).format(Math.abs(value));
-  return { sign, abs };
-}
 
 export default function KpiCard({
   label,
@@ -38,41 +31,64 @@ export default function KpiCard({
   valueTone,
   cents = false,
 }: KpiCardProps) {
-  const { sign, abs } = formatNumber(value, cents);
-  const color = valueTone ?? (value < 0 ? "var(--negative)" : "var(--fg)");
+  const { bg: deltaBg, color: deltaColor } = BADGE_TONES[deltaTone] ?? BADGE_TONES.neutral;
 
   return (
     <div style={s.card}>
       <p style={s.eyebrow}>{label}</p>
 
       <div style={s.valueRow}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 1, color, fontFamily: "var(--font-sans)" }}>
-          {sign && <span style={s.sign}>{sign}</span>}
-          <span style={s.dollar}>$</span>
-          <span style={{ ...s.number, color }}>{abs}</span>
-        </div>
+        <Money
+          value={value}
+          size={23}
+          cents={cents}
+          weight={600}
+          color={valueTone}
+        />
         {sparkline && <div style={s.spark}>{sparkline}</div>}
       </div>
 
       {delta && (
-        <p style={{ ...s.delta, color: DELTA_COLORS[deltaTone] }}>{delta}</p>
+        <div style={{ marginTop: 10 }}>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              padding: "3px 9px",
+              borderRadius: 999,
+              background: deltaBg,
+              color: deltaColor,
+              fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1.2,
+              whiteSpace: "nowrap",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {delta}
+          </span>
+        </div>
       )}
     </div>
   );
 }
 
+const FONT = '"Noto Sans JP", system-ui, -apple-system, sans-serif';
+
 const s: Record<string, React.CSSProperties> = {
   card: {
-    backgroundColor: "var(--bg-raised)",
-    borderRadius: "var(--radius-lg)",
-    border: "1px solid var(--border)",
+    backgroundColor: T.bgRaised,
+    borderRadius: T.radiusLg,
+    border: `1px solid ${T.border}`,
     padding: 18,
     minWidth: 168,
     flex: 1,
     display: "flex",
     flexDirection: "column",
-    gap: 0,
+    fontFamily: FONT,
     transition: "border-color 120ms",
+    cursor: "default",
   },
   eyebrow: {
     margin: "0 0 12px",
@@ -80,8 +96,8 @@ const s: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     letterSpacing: "0.1em",
     textTransform: "uppercase",
-    color: "var(--fg-muted)",
-    fontFamily: "var(--font-sans)",
+    color: T.fgMuted,
+    fontFamily: FONT,
   },
   valueRow: {
     display: "flex",
@@ -89,34 +105,8 @@ const s: Record<string, React.CSSProperties> = {
     alignItems: "flex-end",
     gap: 8,
   },
-  sign: {
-    fontSize: 16,
-    fontWeight: 600,
-    lineHeight: 1,
-    marginRight: 1,
-  },
-  dollar: {
-    fontSize: 14,
-    fontWeight: 600,
-    lineHeight: 1,
-    alignSelf: "flex-start",
-    marginTop: 3,
-  },
-  number: {
-    fontSize: 26,
-    fontWeight: 600,
-    letterSpacing: "-0.02em",
-    lineHeight: 1,
-    fontVariantNumeric: "tabular-nums",
-  },
   spark: {
     marginBottom: 2,
     flexShrink: 0,
-  },
-  delta: {
-    margin: "8px 0 0",
-    fontSize: 12,
-    fontWeight: 600,
-    fontFamily: "var(--font-sans)",
   },
 };

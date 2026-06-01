@@ -2,7 +2,7 @@
 
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import type { Category } from "@/lib/data";
-import { formatMoney } from "@/components/shared/Money";
+import { formatMoney, formatCompact } from "@/components/shared/Money";
 
 interface SpendingDonutProps {
   categories: Category[];
@@ -54,8 +54,8 @@ export default function SpendingDonut({ categories, total }: SpendingDonutProps)
           pointerEvents: "none",
         }}>
           <span style={{ fontSize: 11, color: "var(--fg-muted)", fontWeight: 500 }}>spent</span>
-          <span style={{ fontSize: 17, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: "var(--fg)" }}>
-            {formatMoney(total, false)}
+          <span style={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: "var(--fg)", letterSpacing: "-0.02em" }}>
+            {formatCompact(total)}
           </span>
         </div>
       </div>
