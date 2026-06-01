@@ -65,3 +65,15 @@ export type Household = Database["public"]["Tables"]["households"]["Row"];
 export type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 export type PlaidItemSafe = Database["public"]["Tables"]["plaid_items_safe"]["Row"];
 export type Account = Database["public"]["Tables"]["accounts"]["Row"];
+
+export interface TransactionRule {
+  id: string;
+  household_id: string;
+  merchant_pattern: string;
+  category_key: string;
+  category_label: string;
+  color: string;
+  exclude_recurring: boolean;
+  force_recurring: boolean;
+  created_at: string;
+}

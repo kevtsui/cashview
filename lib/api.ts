@@ -248,6 +248,32 @@ export async function confirmTransaction(txId: string): Promise<void> {
   await supabase.from("transactions").update({ confirmed: true }).eq("id", txId);
 }
 
+// Exclude a merchant from recurring spend analysis
+export async function excludeRecurring(merchantPattern: string): Promise<void> {
+  await supabase.from("transaction_rules").upsert({
+    merchant_pattern: merchantPattern,
+    category_key: "OTHER",
+    category_label: "Other",
+    color: T_BG_MUTED,
+    exclude_recurring: true,
+    force_recurring: false,
+  }, { onConflict: "household_id,merchant_pattern" });
+}
+
+// Force-include a merchant in recurring spend analysis
+export async function includeRecurring(merchantPattern: string, label: string, avgAmt: number): Promise<void> {
+  await supabase.from("transaction_rules").upsert({
+    merchant_pattern: merchantPattern,
+    category_key: "OTHER",
+    category_label: "Other",
+    color: "#7A716A",
+    exclude_recurring: false,
+    force_recurring: true,
+  }, { onConflict: "household_id,merchant_pattern" });
+}
+
+const T_BG_MUTED = "#BDB5AC";
+
 // ── Category helpers ────────────────────────────────────────────────────────
 export const CATEGORY_META: Record<string, { label: string; color: string }> = {
   FOOD_AND_DRINK:            { label: "Food & Drink",   color: "#E5634A" },

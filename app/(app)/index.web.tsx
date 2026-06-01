@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "expo-router";
 import { useAccounts } from "@/lib/AccountsContext";
-import { fetchTransactions, fetchSnapshots, categoryMeta, Transaction, NetWorthSnapshot } from "@/lib/api";
+import { fetchTransactions, fetchSnapshots, fetchTransactionRules, excludeRecurring, categoryMeta, Transaction, NetWorthSnapshot, TransactionRule } from "@/lib/api";
 import { T } from "@/lib/tokens";
 import Money from "@/components/shared/Money";
 import Icon from "@/components/shared/Icon";
@@ -69,7 +69,10 @@ interface RecurringItem {
   occurrences: number;      // how many times seen in 12 months
 }
 
-function analyzeRecurringSpend(txs: Transaction[]): { items: RecurringItem[]; totalMonthly: number } {
+function analyzeRecurringSpend(txs: Transaction[], rules: TransactionRule[]): { items: RecurringItem[]; totalMonthly: number } {
+  const excludedPatterns = new Set(rules.filter((r) => r.exclude_recurring).map((r) => r.merchant_pattern));
+  const forcedPatterns   = new Set(rules.filter((r) => r.force_recurring).map((r) => r.merchant_pattern));
+
   const debits = txs.filter((t) => t.amount >= 10);
 
   const byMerchant: Record<string, { label: string; txs: Transaction[] }> = {};
@@ -83,9 +86,14 @@ function analyzeRecurringSpend(txs: Transaction[]): { items: RecurringItem[]; to
   const items: RecurringItem[] = [];
 
   for (const { label, txs: group } of Object.values(byMerchant)) {
+    const patternKey = label.toLowerCase();
+    // Skip explicitly excluded merchants
+    if (excludedPatterns.has(patternKey)) continue;
+
     // Need at least 2 occurrences AND the merchant must span at least 2 distinct months
     const distinctMonths = new Set(group.map((t) => t.date.slice(0, 7))).size;
-    if (group.length < 2 || distinctMonths < 2) continue;
+    const isForced = forcedPatterns.has(patternKey);
+    if (!isForced && (group.length < 2 || distinctMonths < 2)) continue;
 
     const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
 
@@ -136,17 +144,19 @@ function analyzeRecurringSpend(txs: Transaction[]): { items: RecurringItem[]; to
 }
 
 // ── Recurring spend component ─────────────────────────────────────────────────
-function RecurringSpend({ transactions, loading, limit = 6, onViewAll }: {
+function RecurringSpend({ transactions, rules, loading, limit = 6, onViewAll, onExclude }: {
   transactions: Transaction[];
+  rules: TransactionRule[];
   loading: boolean;
   limit?: number;
   onViewAll?: () => void;
+  onExclude?: (pattern: string) => void;
 }) {
   if (loading) {
     return <div style={{ padding: "24px 18px", color: T.fgMuted, fontSize: 13, textAlign: "center" }}>Loading…</div>;
   }
 
-  const { items, totalMonthly } = analyzeRecurringSpend(transactions);
+  const { items, totalMonthly } = analyzeRecurringSpend(transactions, rules);
 
   if (items.length === 0) {
     return (
@@ -183,12 +193,23 @@ function RecurringSpend({ transactions, loading, limit = 6, onViewAll }: {
               {item.isVariable && <><span style={{ color: T.fgSubtle }}>·</span><span style={{ color: T.fgSubtle }}>est.</span></>}
             </div>
           </div>
-          <div style={{ textAlign: "right", flexShrink: 0 }}>
-            <Money value={-item.avgAmt} size={13} weight={600} cents={false} />
-            {item.cadence !== "monthly" && (
-              <div style={{ fontSize: 11, color: T.fgSubtle, marginTop: 1 }}>
-                ~<Money value={-item.monthlyEquiv} size={11} weight={500} cents={false} />/mo
-              </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ textAlign: "right" }}>
+              <Money value={-item.avgAmt} size={13} weight={600} cents={false} />
+              {item.cadence !== "monthly" && (
+                <div style={{ fontSize: 11, color: T.fgSubtle, marginTop: 1 }}>
+                  ~<Money value={-item.monthlyEquiv} size={11} weight={500} cents={false} />/mo
+                </div>
+              )}
+            </div>
+            {onExclude && (
+              <button
+                title="Remove from recurring"
+                onClick={() => onExclude(item.label.toLowerCase())}
+                style={{ background: "none", border: "none", color: T.fgSubtle, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: "2px 4px", borderRadius: 4, flexShrink: 0 }}
+                onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.color = T.negative}
+                onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.color = T.fgSubtle}
+              >×</button>
             )}
           </div>
         </div>
@@ -246,17 +267,23 @@ export default function OverviewScreen() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [txLoading, setTxLoading] = useState(true);
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
+  const [txRules, setTxRules] = useState<TransactionRule[]>([]);
   const [showAllBills, setShowAllBills] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Fetch 365 days (12 months) for reliable recurring spend analysis
-    fetchTransactions(365)
-      .then(setTransactions)
-      .catch(console.error)
-      .finally(() => setTxLoading(false));
-    fetchSnapshots(365).then(setSnapshots).catch(console.error);
+  const reloadTxData = useCallback(async () => {
+    const [txData, ruleData, snapData] = await Promise.all([
+      fetchTransactions(365),
+      fetchTransactionRules(),
+      fetchSnapshots(365),
+    ]);
+    setTransactions(txData);
+    setTxRules(ruleData);
+    setSnapshots(snapData);
+    setTxLoading(false);
   }, []);
+
+  useEffect(() => { reloadTxData(); }, [reloadTxData]);
 
   // ── Live KPI totals from Plaid ──────────────────────────────────────────────
   const cash = accounts
@@ -419,7 +446,17 @@ export default function OverviewScreen() {
               </button>
             }
           />
-          <RecurringSpend transactions={transactions} loading={txLoading} limit={6} onViewAll={() => setShowAllBills(true)} />
+          <RecurringSpend
+            transactions={transactions}
+            rules={txRules}
+            loading={txLoading}
+            limit={6}
+            onViewAll={() => setShowAllBills(true)}
+            onExclude={async (pattern) => {
+              await excludeRecurring(pattern);
+              reloadTxData();
+            }}
+          />
         </div>
 
         {/* All recurring spend modal */}
@@ -434,7 +471,7 @@ export default function OverviewScreen() {
                 <button onClick={() => setShowAllBills(false)} style={{ background: "none", border: "none", fontSize: 22, color: T.fgMuted, cursor: "pointer", lineHeight: 1 }}>×</button>
               </div>
               <div style={{ overflowY: "auto", flex: 1 }}>
-                <RecurringSpend transactions={transactions} loading={txLoading} limit={100} />
+                <RecurringSpend transactions={transactions} rules={txRules} loading={txLoading} limit={100} onExclude={async (pattern) => { await excludeRecurring(pattern); reloadTxData(); setShowAllBills(false); }} />
               </div>
             </div>
           </div>

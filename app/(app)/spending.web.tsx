@@ -23,16 +23,24 @@ function effectiveCategory(tx: Transaction, rules: Map<string, TransactionRule>)
   return { key: tx.personal_finance_category ?? "OTHER", label: meta.label, color: meta.color };
 }
 
-// ── Category picker dropdown ──────────────────────────────────────────────────
-function CategoryPicker({ tx, rules, onCategorize, onClose }: {
-  tx: Transaction;
-  rules: Map<string, TransactionRule>;
+// ── Category picker — fixed position to avoid overflow clipping ───────────────
+interface PickerState { txId: string; top: number; left: number; tx: Transaction }
+
+function CategoryPickerPortal({ state, onCategorize, onClose }: {
+  state: PickerState;
   onCategorize: (key: string, label: string, color: string) => void;
   onClose: () => void;
 }) {
   const cats = Object.entries(CATEGORY_META).map(([key, meta]) => ({ key, ...meta }));
+
+  // Adjust left so picker doesn't overflow right edge of viewport
+  const left = Math.min(state.left, window.innerWidth - 230);
+
   return (
-    <div onClick={(e) => e.stopPropagation()} style={{ position: "absolute", right: 0, top: "100%", zIndex: 50, background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusMd, boxShadow: "0 8px 24px rgba(22,17,14,.12)", width: 220, maxHeight: 280, overflowY: "auto", marginTop: 4 }}>
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ position: "fixed", top: state.top, left, zIndex: 9999, background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusMd, boxShadow: "0 8px 24px rgba(22,17,14,.14)", width: 220, maxHeight: 300, overflowY: "auto" }}
+    >
       <div style={{ padding: "8px 12px", fontSize: 11, fontWeight: 600, color: T.fgMuted, letterSpacing: "0.08em", textTransform: "uppercase", borderBottom: `1px solid ${T.borderSubtle}`, fontFamily: FONT }}>
         Set category
       </div>
@@ -56,9 +64,8 @@ export default function SpendingScreen() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null); // filter
-  const [categoryModal, setCategoryModal] = useState<string | null>(null);       // tx id for picker
-  const [pickerTx, setPickerTx] = useState<Transaction | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [picker, setPicker] = useState<PickerState | null>(null);
 
   const rulesMap = useMemo(() => new Map(rules.map((r) => [r.category_key, r])), [rules]);
 
@@ -94,8 +101,7 @@ export default function SpendingScreen() {
   }, []);
 
   const handleCategorize = useCallback(async (tx: Transaction, key: string, label: string, color: string) => {
-    setPickerTx(null);
-    setCategoryModal(null);
+    setPicker(null);
     // Optimistically update UI
     setTransactions((prev) => prev.map((t) =>
       t.id === tx.id ? { ...t, user_category: key, user_category_label: label, confirmed: true } : t
@@ -182,7 +188,7 @@ export default function SpendingScreen() {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 16, fontFamily: FONT }} onClick={() => { setPickerTx(null); setCategoryModal(null); }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, fontFamily: FONT }} onClick={() => setPicker(null)}>
 
       {/* ── Top bar ───────────────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
@@ -282,36 +288,28 @@ export default function SpendingScreen() {
             const eff = effectiveCategory(tx, rulesMap);
             const displayName = tx.merchant_name ?? tx.name;
             const dateLabel = new Date(tx.date + "T12:00:00").toLocaleString("en-US", { month: "short", day: "numeric" });
-            const isPickerOpen = pickerTx?.id === tx.id;
-
             return (
               <div key={tx.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 18px", borderTop: i ? `1px solid ${T.borderSubtle}` : "none", background: !tx.confirmed ? T.bgSunken + "80" : "transparent" }}>
-                {/* Monogram */}
                 <div style={{ width: 34, height: 34, borderRadius: 9, background: eff.color + "22", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                   <span style={{ fontSize: 11, fontWeight: 700, color: eff.color }}>{displayName.slice(0, 2).toUpperCase()}</span>
                 </div>
 
-                {/* Name + category chip */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 13.5, color: T.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{displayName}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-                    {/* Clickable category chip */}
-                    <div style={{ position: "relative" }}>
-                      <button onClick={(e) => { e.stopPropagation(); setPickerTx(isPickerOpen ? null : tx); setCategoryModal(tx.id); }}
-                        style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 7px", borderRadius: 999, background: eff.color + "22", border: "none", cursor: "pointer", fontFamily: FONT }}>
-                        <span style={{ width: 6, height: 6, borderRadius: 2, background: eff.color }} />
-                        <span style={{ fontSize: 11, fontWeight: 600, color: eff.color }}>{eff.label}</span>
-                        <span style={{ fontSize: 10, color: eff.color, opacity: 0.7 }}>▾</span>
-                      </button>
-                      {isPickerOpen && (
-                        <CategoryPicker
-                          tx={tx}
-                          rules={rulesMap}
-                          onCategorize={(key, label, color) => handleCategorize(tx, key, label, color)}
-                          onClose={() => setPickerTx(null)}
-                        />
-                      )}
-                    </div>
+                    {/* Category chip — opens fixed-position picker */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (picker?.txId === tx.id) { setPicker(null); return; }
+                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                        setPicker({ txId: tx.id, top: rect.bottom + 4, left: rect.left, tx });
+                      }}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 7px", borderRadius: 999, background: eff.color + "22", border: "none", cursor: "pointer", fontFamily: FONT }}>
+                      <span style={{ width: 6, height: 6, borderRadius: 2, background: eff.color }} />
+                      <span style={{ fontSize: 11, fontWeight: 600, color: eff.color }}>{eff.label}</span>
+                      <span style={{ fontSize: 10, color: eff.color, opacity: 0.7 }}>▾</span>
+                    </button>
                     {!tx.confirmed && (
                       <button onClick={(e) => { e.stopPropagation(); handleConfirm(tx.id); }}
                         style={{ fontSize: 11, color: T.accent, fontWeight: 600, background: T.accentSoft, border: "none", borderRadius: 999, padding: "2px 7px", cursor: "pointer", fontFamily: FONT }}>
@@ -328,6 +326,15 @@ export default function SpendingScreen() {
           })
         )}
       </div>
+
+      {/* Fixed-position category picker portal — never clipped by overflow */}
+      {picker && (
+        <CategoryPickerPortal
+          state={picker}
+          onCategorize={(key, label, color) => handleCategorize(picker.tx, key, label, color)}
+          onClose={() => setPicker(null)}
+        />
+      )}
     </div>
   );
 }
