@@ -112,6 +112,7 @@ serve(async (req) => {
               household_id: profile.household_id,
               plaid_item_id: item.id,
               plaid_account_id: acct.account_id as string,
+              mask: (acct.mask as string | null) ?? null,
               name: acct.name as string,
               official_name: (acct.official_name as string | null) ?? null,
               type: acct.type as string,

@@ -39,11 +39,8 @@ export default function AccountsScreen() {
                 <InstMark inst={acct.name.includes("Morgan") ? "Morgan Stanley" : "Chase"} size={34} />
                 <View style={s.meta}>
                   <Text style={s.name}>{acct.name}</Text>
-                  <Text style={s.sub}>{acct.type} ····{acct.plaid_account_id.slice(-4)}</Text>
+                  <Text style={s.sub}>{acct.subtype ?? acct.type}{acct.mask ? ` ····${acct.mask}` : ""}</Text>
                 </View>
-                {acct.type === "credit" && (
-                  <Badge tone="negative">{acct.available_balance ?? 0}% apr</Badge>
-                )}
                 <Money value={acct.current_balance ?? 0} size={17} weight="600" />
               </View>
             ))}

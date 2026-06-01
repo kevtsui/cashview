@@ -49,7 +49,7 @@ export default function AccountsList() {
             <View style={styles.rowMeta}>
               <Text style={styles.acctName} numberOfLines={1}>{acct.name}</Text>
               <Text style={styles.acctSub}>
-                {institutionFromAccount(acct)} ····{acct.plaid_account_id.slice(-4)}
+                {institutionFromAccount(acct)}{acct.mask ? ` ····${acct.mask}` : ""}
               </Text>
             </View>
             <Money value={acct.current_balance ?? 0} size={15} weight="600" cents={false} />

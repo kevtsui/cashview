@@ -43,6 +43,7 @@ export interface Database {
           household_id: string;
           plaid_item_id: string;
           plaid_account_id: string;
+          mask: string | null;
           name: string;
           official_name: string | null;
           type: string;
