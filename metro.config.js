@@ -17,8 +17,17 @@ const WEB_STUBS = new Set([
   "@opentelemetry/api",          // supabase-js peer dep, not needed on web
 ]);
 
+// Packages used only in .web.tsx files — stub on native so they don't crash
+const NATIVE_STUBS = new Set([
+  "recharts",
+  "lucide-react",
+]);
+
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (platform === "web" && WEB_STUBS.has(moduleName)) {
+    return { type: "empty" };
+  }
+  if (platform !== "web" && NATIVE_STUBS.has(moduleName)) {
     return { type: "empty" };
   }
   if (originalResolveRequest) {

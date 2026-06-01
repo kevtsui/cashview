@@ -27,24 +27,28 @@ export default function PlaidLinkButton({ linkToken, onSuccess, onExit }: PlaidL
       disabled={!ready}
     >
       <Text style={styles.text}>+ Add account</Text>
+
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   button: {
-    width: "100%",
-    backgroundColor: "#0ea5e9",
-    borderRadius: 12,
-    paddingVertical: 14,
+    width: "auto",
+    backgroundColor: "var(--accent)" as any,
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 14,
     alignItems: "center",
+    flexDirection: "row" as any,
+    gap: 7,
   },
   buttonDisabled: {
-    backgroundColor: "#0369a1",
+    opacity: 0.6,
   },
   text: {
     color: "#fff",
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
   },
 });

@@ -1,376 +1,145 @@
-// app/(app)/index.tsx
-// Main dashboard screen. Shows total cash + per-account cards.
+// app/(app)/index.tsx — Overview view (default route after login).
+// KPI strip · net-worth area chart · spending donut · accounts list · bills.
 
-import { useEffect, useState, useCallback } from "react";
-import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  ActivityIndicator,
-  Alert,
-  RefreshControl,
-} from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
-import { StatusBar } from "expo-status-bar";
-import { supabase } from "@/lib/supabase";
-import { createLinkToken, exchangeToken, syncBalances, fetchAccounts } from "@/lib/api";
-import TotalBanner from "@/components/TotalBanner";
-import AccountCard from "@/components/AccountCard";
-import PlaidLinkButton from "@/components/PlaidLinkButton";
-import type { Account } from "@/types/database";
+import { View, Text, StyleSheet } from "react-native";
+import { useAccounts } from "@/lib/AccountsContext";
+import { CATEGORIES, NET_WORTH_SERIES, CASH_SERIES } from "@/lib/data";
+import { T } from "@/lib/tokens";
 
-export default function DashboardScreen() {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [linkToken, setLinkToken] = useState<string | null>(null);
-  const [loadingAccounts, setLoadingAccounts] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+import KpiCard from "@/components/overview/KpiCard";
+import Sparkline from "@/components/overview/Sparkline";
+import NetWorthChart from "@/components/overview/NetWorthChart";
+import SpendingDonut from "@/components/overview/SpendingDonut";
+import AccountsList from "@/components/overview/AccountsList";
+import UpcomingBills from "@/components/overview/UpcomingBills";
 
-  // ── Load accounts from DB on mount ───────────────────────────────────────
-  const loadAccounts = useCallback(async () => {
-    try {
-      const data = await fetchAccounts();
-      setAccounts(data);
-      setError(null);
-    } catch (err) {
-      setError("Failed to load accounts. Pull to refresh.");
-    } finally {
-      setLoadingAccounts(false);
-    }
-  }, []);
+// Pre-compute sparkline value arrays from placeholder series
+const CASH_SPARK    = CASH_SERIES.map((p) => p.value);
+const NW_SPARK      = NET_WORTH_SERIES.map((p) => p.value);
+const INVEST_SPARK  = NW_SPARK.map((v) => v * 0.75);
+const DEBT_SPARK    = [3100,2900,3400,2800,3200,2600,3100,2900,2700,3300,3000,3284];
+const SPEND_TOTAL   = CATEGORIES.reduce((s, c) => s + c.spent, 0);
 
-  useEffect(() => {
-    loadAccounts();
-  }, [loadAccounts]);
+export default function OverviewScreen() {
+  const { accounts } = useAccounts();
 
-  // ── Fetch a link token when the component mounts (ready for "Add account") ─
-  const prepareLinkToken = useCallback(async () => {
-    try {
-      const { link_token } = await createLinkToken();
-      setLinkToken(link_token);
-    } catch (err) {
-      // Non-fatal: user can still see existing accounts; retry on next tap
-      console.warn("Could not pre-fetch link token:", err);
-    }
-  }, []);
+  // Live totals from Plaid; fall back to design-handoff placeholders when empty
+  const haslive = accounts.length > 0;
 
-  useEffect(() => {
-    prepareLinkToken();
-  }, [prepareLinkToken]);
+  const cashLive = accounts
+    .filter((a) => ["depository", "checking", "savings"].includes(a.type ?? ""))
+    .reduce((s, a) => s + (a.current_balance ?? 0), 0);
 
-  // ── Manual refresh (re-fetches from Plaid) ───────────────────────────────
-  const handleRefresh = useCallback(async (isPullToRefresh = false) => {
-    if (syncing) return;
-    isPullToRefresh ? setRefreshing(true) : setSyncing(true);
-    setError(null);
+  const investLive = accounts
+    .filter((a) => ["investment", "brokerage"].includes(a.type ?? ""))
+    .reduce((s, a) => s + (a.current_balance ?? 0), 0);
 
-    try {
-      const result = await syncBalances();
-      setAccounts(result.accounts);
+  const debtLive = accounts
+    .filter((a) => a.type === "credit")
+    .reduce((s, a) => s + (a.current_balance ?? 0), 0);
 
-      if (result.errors?.length) {
-        setError(`Partial sync: ${result.errors.join("; ")}`);
-      }
-    } catch (err) {
-      setError("Sync failed. Check your connection and try again.");
-    } finally {
-      setSyncing(false);
-      setRefreshing(false);
-      // Pre-fetch a fresh link token in the background for next "Add account"
-      prepareLinkToken();
-    }
-  }, [syncing, prepareLinkToken]);
-
-  // ── Plaid Link callbacks ─────────────────────────────────────────────────
-  const handlePlaidSuccess = useCallback(async (publicToken: string, institution?: { id?: string; name?: string }) => {
-    setSyncing(true);
-    try {
-      await exchangeToken({
-        public_token: publicToken,
-        institution_id: institution?.id,
-        institution_name: institution?.name,
-      });
-      // Reload accounts after exchange (initial balances are fetched server-side)
-      const data = await fetchAccounts();
-      setAccounts(data);
-    } catch (err) {
-      Alert.alert(
-        "Connection failed",
-        "Your account was linked but balances couldn't be fetched. Try refreshing."
-      );
-    } finally {
-      setSyncing(false);
-      setLinkToken(null); // Consume the token; fetch a new one
-      prepareLinkToken();
-    }
-  }, [prepareLinkToken]);
-
-  const handlePlaidExit = useCallback(() => {
-    setLinkToken(null);
-    prepareLinkToken();
-  }, [prepareLinkToken]);
-
-  // ── Derived state ─────────────────────────────────────────────────────────
-  const totalCash = accounts.reduce(
-    (sum, acct) => sum + (acct.current_balance ?? 0),
-    0
-  );
-  const mostRecentUpdate = accounts.length
-    ? accounts.reduce((latest, acct) =>
-        acct.last_updated > latest ? acct.last_updated : latest,
-        accounts[0].last_updated
-      )
-    : null;
-
-  const handleSignOut = () => {
-    Alert.alert("Sign out", "Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Sign out",
-        style: "destructive",
-        onPress: () => supabase.auth.signOut(),
-      },
-    ]);
-  };
+  const cash    = haslive ? cashLive    : 84870;
+  const invest  = haslive ? investLive  : 280631;
+  const debt    = haslive ? debtLive    : -3284;
+  const netWorth = cash + invest - Math.abs(debt);
 
   return (
-    <SafeAreaView style={styles.container} edges={["top"]}>
-      <StatusBar style="light" />
-
-      {/* Header */}
-      <View style={styles.navBar}>
-        <Text style={styles.navTitle}>CashView</Text>
-        <TouchableOpacity onPress={handleSignOut} style={styles.signOutBtn}>
-          <Text style={styles.signOutText}>Sign out</Text>
-        </TouchableOpacity>
+    <View style={s.root}>
+      {/* ── KPI strip ───────────────────────────────────────────────────── */}
+      <View style={s.strip}>
+        <KpiCard
+          label="Total Cash"
+          value={cash}
+          delta="+$1,420 (30d)"
+          deltaTone="positive"
+          sparkline={<Sparkline values={CASH_SPARK} color={T.accent} />}
+        />
+        <KpiCard
+          label="Net Worth"
+          value={netWorth}
+          delta="+5.2% (12mo)"
+          deltaTone="positive"
+          sparkline={<Sparkline values={NW_SPARK} color={T.invest} />}
+        />
+        <KpiCard
+          label="Investments"
+          value={invest}
+          delta="+0.74% today"
+          deltaTone="invest"
+          sparkline={<Sparkline values={INVEST_SPARK} color={T.invest} />}
+          valueTone={T.invest}
+        />
+        <KpiCard
+          label="Card Debt"
+          value={debt}
+          delta="due Jun 14"
+          deltaTone="negative"
+          sparkline={<Sparkline values={DEBT_SPARK} color={T.negative} />}
+        />
       </View>
 
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => handleRefresh(true)}
-            tintColor="#38bdf8"
-            colors={["#38bdf8"]}
-          />
-        }
-      >
-        {/* Total cash banner */}
-        <TotalBanner
-          totalCash={totalCash}
-          lastUpdated={mostRecentUpdate}
-          isLoading={loadingAccounts}
-        />
-
-        {/* Error notice */}
-        {error && (
-          <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>{error}</Text>
+      {/* ── Chart row ───────────────────────────────────────────────────── */}
+      <View style={s.chartRow}>
+        {/* Net-worth area chart */}
+        <View style={[s.card, s.chartMain]}>
+          <CardHead title="Net worth" subtitle="Last 12 months" />
+          <View style={s.chartBody}>
+            <NetWorthChart series={NET_WORTH_SERIES} />
           </View>
-        )}
+        </View>
 
-        {/* Accounts section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Accounts</Text>
-            <TouchableOpacity
-              onPress={() => handleRefresh(false)}
-              disabled={syncing || loadingAccounts}
-              style={styles.refreshBtn}
-            >
-              {syncing ? (
-                <ActivityIndicator size="small" color="#38bdf8" />
-              ) : (
-                <Text style={styles.refreshText}>Refresh</Text>
-              )}
-            </TouchableOpacity>
+        {/* Spending donut */}
+        <View style={[s.card, s.chartSide]}>
+          <CardHead title="Spending by category" subtitle="This month" />
+          <View style={s.chartBody}>
+            <SpendingDonut categories={CATEGORIES} total={SPEND_TOTAL} />
           </View>
-
-          {loadingAccounts ? (
-            <View style={styles.loadingPlaceholder}>
-              <ActivityIndicator color="#38bdf8" />
-            </View>
-          ) : accounts.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyIcon}>🔗</Text>
-              <Text style={styles.emptyTitle}>No accounts yet</Text>
-              <Text style={styles.emptySubtitle}>
-                Tap "Add account" below to connect your first bank or brokerage.
-              </Text>
-            </View>
-          ) : (
-            accounts.map((account) => (
-              <AccountCard key={account.id} account={account} />
-            ))
-          )}
         </View>
+      </View>
 
-        {/* Add account button via Plaid Link */}
-        <View style={styles.addSection}>
-          {linkToken ? (
-            <PlaidLinkButton
-              linkToken={linkToken}
-              onSuccess={handlePlaidSuccess}
-              onExit={handlePlaidExit}
-            />
-          ) : (
-            <TouchableOpacity
-              style={[styles.addButton, styles.addButtonLoading]}
-              onPress={prepareLinkToken}
-            >
-              <Text style={styles.addButtonText}>+ Add account</Text>
-            </TouchableOpacity>
-          )}
-          <Text style={styles.poweredBy}>Powered by Plaid</Text>
+      {/* ── Lower row ───────────────────────────────────────────────────── */}
+      <View style={s.lowerRow}>
+        <View style={s.lowerMain}>
+          <AccountsList />
         </View>
-
-        {/* Future work note */}
-        <View style={styles.futureNote}>
-          <Text style={styles.futureNoteText}>
-            v1 · Transaction history, spending trends, and budgeting coming soon.
-          </Text>
+        <View style={s.lowerSide}>
+          <UpcomingBills />
         </View>
-      </ScrollView>
-    </SafeAreaView>
+      </View>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0f172a",
-  },
-  navBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: "#1e293b",
-  },
-  navTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#f8fafc",
-  },
-  signOutBtn: {
-    padding: 4,
-  },
-  signOutText: {
-    fontSize: 14,
-    color: "#64748b",
-  },
-  scroll: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingBottom: 48,
-  },
-  errorBanner: {
-    marginHorizontal: 16,
-    marginTop: 8,
-    padding: 12,
-    backgroundColor: "#450a0a",
-    borderRadius: 10,
+function CardHead({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <View style={s.cardHead}>
+      <Text style={s.cardTitle}>{title}</Text>
+      <Text style={s.cardSub}>{subtitle}</Text>
+    </View>
+  );
+}
+
+const s = StyleSheet.create({
+  root:      { gap: 16 },
+  strip:     { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+  chartRow:  { flexDirection: "row", gap: 16 },
+  lowerRow:  { flexDirection: "row", gap: 16 },
+  card: {
+    backgroundColor: T.bgRaised,
+    borderRadius: T.radiusLg,
     borderWidth: 1,
-    borderColor: "#7f1d1d",
+    borderColor: T.border,
+    overflow: "hidden",
   },
-  errorText: {
-    color: "#fca5a5",
-    fontSize: 13,
+  chartMain:  { flex: 1.6 },
+  chartSide:  { flex: 1 },
+  chartBody:  { padding: 20, paddingTop: 0 },
+  lowerMain:  { flex: 1.4 },
+  lowerSide:  { flex: 1 },
+  cardHead: {
+    padding: 20,
+    paddingBottom: 12,
   },
-  section: {
-    marginTop: 8,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#94a3b8",
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-  refreshBtn: {
-    minWidth: 60,
-    alignItems: "flex-end",
-  },
-  refreshText: {
-    color: "#38bdf8",
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  loadingPlaceholder: {
-    paddingVertical: 40,
-    alignItems: "center",
-  },
-  emptyState: {
-    alignItems: "center",
-    paddingVertical: 48,
-    paddingHorizontal: 32,
-  },
-  emptyIcon: {
-    fontSize: 40,
-    marginBottom: 12,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#f1f5f9",
-    marginBottom: 8,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: "#64748b",
-    textAlign: "center",
-    lineHeight: 20,
-  },
-  addSection: {
-    marginTop: 24,
-    marginHorizontal: 16,
-    alignItems: "center",
-  },
-  addButton: {
-    width: "100%",
-    backgroundColor: "#0ea5e9",
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: "center",
-  },
-  addButtonLoading: {
-    backgroundColor: "#0369a1",
-  },
-  addButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  poweredBy: {
-    marginTop: 8,
-    fontSize: 12,
-    color: "#475569",
-  },
-  futureNote: {
-    marginTop: 32,
-    marginHorizontal: 16,
-    padding: 12,
-    backgroundColor: "#1e293b",
-    borderRadius: 10,
-  },
-  futureNoteText: {
-    fontSize: 12,
-    color: "#475569",
-    textAlign: "center",
-  },
+  cardTitle:  { fontSize: 15, fontWeight: "600", color: T.fg },
+  cardSub:    { fontSize: 12.5, color: T.fgMuted, marginTop: 2 },
 });
