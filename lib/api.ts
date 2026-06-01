@@ -134,6 +134,10 @@ export interface TransactionRule {
   category_key: string;
   category_label: string;
   color: string;
+  exclude_recurring?: boolean;
+  force_recurring?: boolean;
+  forced_cadence?: string | null;
+  forced_amount?: number | null;
   created_at: string;
 }
 
@@ -262,15 +266,22 @@ export async function excludeRecurring(merchantPattern: string): Promise<void> {
   }, { onConflict: "household_id,merchant_pattern" });
 }
 
-// Force-include a merchant in recurring spend analysis
-export async function includeRecurring(merchantPattern: string, label: string, avgAmt: number): Promise<void> {
+// Force-include a merchant in recurring spend analysis with explicit cadence + amount
+export async function includeRecurring(params: {
+  merchantPattern: string;
+  label: string;
+  cadence: string;       // "weekly" | "monthly" | "bimonthly" | "quarterly"
+  amount: number;
+}): Promise<void> {
   await supabase.from("transaction_rules").upsert({
-    merchant_pattern: merchantPattern,
+    merchant_pattern: params.merchantPattern,
     category_key: "OTHER",
     category_label: "Other",
     color: "#7A716A",
     exclude_recurring: false,
     force_recurring: true,
+    forced_cadence: params.cadence,
+    forced_amount: params.amount,
   }, { onConflict: "household_id,merchant_pattern" });
 }
 

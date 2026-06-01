@@ -3,10 +3,10 @@
 // Net worth chart and sparklines require historical snapshots — shown as
 // coming-soon until we have multiple data points.
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "expo-router";
 import { useAccounts } from "@/lib/AccountsContext";
-import { fetchTransactions, fetchSnapshots, fetchTransactionRules, excludeRecurring, categoryMeta, Transaction, NetWorthSnapshot, TransactionRule } from "@/lib/api";
+import { fetchTransactions, fetchSnapshots, fetchTransactionRules, excludeRecurring, includeRecurring, categoryMeta, Transaction, NetWorthSnapshot, TransactionRule } from "@/lib/api";
 import { T } from "@/lib/tokens";
 import Money from "@/components/shared/Money";
 import Icon from "@/components/shared/Icon";
@@ -138,6 +138,25 @@ function analyzeRecurringSpend(txs: Transaction[], rules: TransactionRule[]): { 
     });
   }
 
+  // ── Inject manually forced recurring items ───────────────────────────────────
+  const CADENCE_MULTIPLIERS: Record<string, number> = {
+    weekly: 4.3, monthly: 1, bimonthly: 0.5, quarterly: 0.33,
+  };
+  for (const rule of rules.filter((r) => r.force_recurring && r.forced_cadence && r.forced_amount)) {
+    // Skip if already captured by the algorithm
+    if (items.some((i) => i.label.toLowerCase() === rule.merchant_pattern)) continue;
+    const mult = CADENCE_MULTIPLIERS[rule.forced_cadence!] ?? 1;
+    items.push({
+      id: rule.id,
+      label: rule.merchant_pattern,
+      avgAmt: rule.forced_amount!,
+      monthlyEquiv: Math.round(rule.forced_amount! * mult * 100) / 100,
+      cadence: rule.forced_cadence!,
+      isVariable: false,
+      occurrences: 0, // manually added
+    });
+  }
+
   const sorted = items.sort((a, b) => b.monthlyEquiv - a.monthlyEquiv);
   const totalMonthly = Math.round(sorted.reduce((s, i) => s + i.monthlyEquiv, 0) * 100) / 100;
   return { items: sorted, totalMonthly };
@@ -226,6 +245,130 @@ function RecurringSpend({ transactions, rules, loading, limit = 6, onViewAll, on
   );
 }
 
+// ── Add recurring modal ───────────────────────────────────────────────────────
+const CADENCES = [
+  { key: "weekly",    label: "Weekly",    hint: "×4.3/mo" },
+  { key: "monthly",   label: "Monthly",   hint: "×1/mo"   },
+  { key: "bimonthly", label: "Bimonthly", hint: "×0.5/mo" },
+  { key: "quarterly", label: "Quarterly", hint: "×0.33/mo"},
+];
+
+function AddRecurringModal({ transactions, onSave, onClose }: {
+  transactions: Transaction[];
+  onSave: (pattern: string, label: string, cadence: string, amount: number) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [cadence, setCadence] = useState("monthly");
+  const [amount, setAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // Unique merchants from transactions
+  const merchants = useMemo(() => {
+    const seen = new Map<string, { label: string; avg: number }>();
+    for (const tx of transactions) {
+      if (tx.amount <= 0) continue;
+      const key = (tx.merchant_name ?? tx.name).toLowerCase();
+      const label = tx.merchant_name ?? tx.name;
+      if (!seen.has(key)) seen.set(key, { label, avg: 0 });
+    }
+    // Compute avg amount per merchant
+    const counts: Record<string, number[]> = {};
+    for (const tx of transactions) {
+      if (tx.amount <= 0) continue;
+      const key = (tx.merchant_name ?? tx.name).toLowerCase();
+      if (!counts[key]) counts[key] = [];
+      counts[key].push(tx.amount);
+    }
+    return Array.from(seen.entries())
+      .map(([key, { label }]) => ({
+        key, label,
+        avg: Math.round((counts[key] ?? [0]).reduce((s, a) => s + a, 0) / (counts[key]?.length || 1) * 100) / 100,
+      }))
+      .filter((m) => !search || m.label.toLowerCase().includes(search.toLowerCase()))
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .slice(0, 20);
+  }, [transactions, search]);
+
+  const selectedMerchant = merchants.find((m) => m.key === selected);
+
+  const handleSave = async () => {
+    if (!selected || !selectedMerchant) return;
+    const amt = parseFloat(amount) || selectedMerchant.avg;
+    if (!amt) return;
+    setSaving(true);
+    await onSave(selected, selectedMerchant.label, cadence, amt);
+    setSaving(false);
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(22,17,14,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, width: 460, maxWidth: "calc(100vw - 32px)", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(22,17,14,.14)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${T.borderSubtle}` }}>
+          <div style={{ fontWeight: 700, fontSize: 16, color: T.fg, fontFamily: FONT }}>Add recurring charge</div>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, color: T.fgMuted, cursor: "pointer", lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14, overflowY: "auto", flex: 1 }}>
+          {/* Search merchants */}
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: T.fgMuted, display: "block", marginBottom: 6, fontFamily: FONT }}>Search merchant</label>
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="e.g. Netflix, PG&E..."
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, color: T.fg, fontSize: 14, fontFamily: FONT, boxSizing: "border-box" as any }} />
+          </div>
+
+          {/* Merchant list */}
+          <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden", maxHeight: 200, overflowY: "auto" }}>
+            {merchants.map((m, i) => (
+              <div key={m.key} onClick={() => { setSelected(m.key); setAmount(m.avg.toFixed(2)); }}
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 12px", borderTop: i ? `1px solid ${T.borderSubtle}` : "none", background: selected === m.key ? T.bgChip : "transparent", cursor: "pointer", fontFamily: FONT }}>
+                <span style={{ fontSize: 13.5, fontWeight: selected === m.key ? 600 : 400, color: T.fg }}>{m.label}</span>
+                <span style={{ fontSize: 12, color: T.fgMuted, fontVariantNumeric: "tabular-nums" }}>${m.avg.toFixed(0)} avg</span>
+              </div>
+            ))}
+            {merchants.length === 0 && <div style={{ padding: "16px 12px", color: T.fgMuted, fontSize: 13, fontFamily: FONT }}>No merchants found.</div>}
+          </div>
+
+          {selected && (
+            <>
+              {/* Cadence */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: T.fgMuted, display: "block", marginBottom: 8, fontFamily: FONT }}>Frequency</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {CADENCES.map((c) => (
+                    <button key={c.key} onClick={() => setCadence(c.key)}
+                      style={{ flex: 1, padding: "8px 6px", borderRadius: 8, border: `1px solid ${cadence === c.key ? T.accent : T.border}`, background: cadence === c.key ? T.accentSoft : "transparent", color: cadence === c.key ? T.accent : T.fgMuted, fontWeight: 600, fontSize: 12, cursor: "pointer", fontFamily: FONT, textAlign: "center" as any }}>
+                      <div>{c.label}</div>
+                      <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>{c.hint}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Amount */}
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: T.fgMuted, display: "block", marginBottom: 6, fontFamily: FONT }}>Amount ($)</label>
+                <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" min="0"
+                  style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${T.border}`, background: T.bg, color: T.fg, fontSize: 14, fontFamily: FONT, boxSizing: "border-box" as any }} />
+              </div>
+            </>
+          )}
+        </div>
+
+        <div style={{ padding: "14px 20px", borderTop: `1px solid ${T.borderSubtle}`, display: "flex", justifyContent: "flex-end", gap: 10 }}>
+          <button onClick={onClose} style={{ padding: "9px 16px", borderRadius: 10, border: `1px solid ${T.border}`, background: "transparent", color: T.fg, fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: FONT }}>Cancel</button>
+          <button onClick={handleSave} disabled={!selected || saving}
+            style={{ padding: "9px 20px", borderRadius: 10, border: "none", background: T.accent, color: "#fff", fontWeight: 600, fontSize: 14, cursor: !selected || saving ? "default" : "pointer", opacity: !selected || saving ? 0.6 : 1, fontFamily: FONT }}>
+            {saving ? "Saving…" : "Add"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── KPI card (no sparkline — historical data not available yet) ───────────────
 interface KpiProps {
   label: string;
@@ -269,6 +412,7 @@ export default function OverviewScreen() {
   const [snapshots, setSnapshots] = useState<NetWorthSnapshot[]>([]);
   const [txRules, setTxRules] = useState<TransactionRule[]>([]);
   const [showAllBills, setShowAllBills] = useState(false);
+  const [showAddRecurring, setShowAddRecurring] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   const reloadTxData = useCallback(async () => {
@@ -441,9 +585,14 @@ export default function OverviewScreen() {
           <CardHead
             title="Recurring spend"
             action={
-              <button onClick={() => setShowAllBills(true)} style={{ background: "none", border: "none", color: T.accent, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: FONT, padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                View all <Icon name="arrow" size={13} color={T.accent} />
-              </button>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <button onClick={() => setShowAddRecurring(true)} style={{ background: "none", border: "none", color: T.fgMuted, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: FONT, padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <Icon name="plus" size={13} color={T.fgMuted} /> Add
+                </button>
+                <button onClick={() => setShowAllBills(true)} style={{ background: "none", border: "none", color: T.accent, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: FONT, padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  View all <Icon name="arrow" size={13} color={T.accent} />
+                </button>
+              </div>
             }
           />
           <RecurringSpend
@@ -471,11 +620,23 @@ export default function OverviewScreen() {
                 <button onClick={() => setShowAllBills(false)} style={{ background: "none", border: "none", fontSize: 22, color: T.fgMuted, cursor: "pointer", lineHeight: 1 }}>×</button>
               </div>
               <div style={{ overflowY: "auto", flex: 1 }}>
-                <RecurringSpend transactions={transactions} rules={txRules} loading={txLoading} limit={100} onExclude={async (pattern) => { await excludeRecurring(pattern); reloadTxData(); setShowAllBills(false); }} />
+                <RecurringSpend transactions={transactions} rules={txRules} loading={txLoading} limit={100} onExclude={async (pattern) => { await excludeRecurring(pattern); reloadTxData(); /* keep modal open */ }} />
               </div>
             </div>
           </div>
         )}
+
+      {/* Add recurring modal */}
+      {showAddRecurring && (
+        <AddRecurringModal
+          transactions={transactions}
+          onSave={async (pattern, label, cad, amt) => {
+            await includeRecurring({ merchantPattern: pattern, label, cadence: cad, amount: amt });
+            await reloadTxData();
+          }}
+          onClose={() => setShowAddRecurring(false)}
+        />
+      )}
 
       {/* Category drill-down modal */}
       {selectedCategory && (() => {
