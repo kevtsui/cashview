@@ -30,29 +30,36 @@ function institutionName(acct: Account): string {
 }
 
 // ── Name normalization ────────────────────────────────────────────────────────
-// ACH/bank transactions often have unique IDs appended each month.
-// Strip them so "MORTGAGE PMT ID:12345" and "MORTGAGE PMT ID:67890" group together.
 function normalizeName(tx: Transaction): string {
-  const raw = (tx.merchant_name ?? tx.name);
+  const raw = tx.merchant_name ?? tx.name;
   return raw
-    .replace(/\s+(PPD|WEB|CCD|TEL|ACH)\s+.*$/i, "")   // strip ACH type + trailing ID
-    .replace(/\s+ID[:\s]+[\w\d\-]+/gi, "")              // strip "ID: 123456"
-    .replace(/\s+PMT\s+#?[\d\-]+/gi, "")                // strip payment numbers
-    .replace(/\s+\*[\w\d]+$/i, "")                      // strip * reference codes
-    .replace(/\s+REF[\s:#]+[\w\d]+/gi, "")              // strip REF codes
-    .replace(/\s+\d{6,}$/g, "")                         // strip long trailing numbers
+    .replace(/\s+(PPD|WEB|CCD|TEL|ACH)\s+.*$/i, "")
+    .replace(/\s+ID[:\s]+[\w\d\-]+/gi, "")
+    .replace(/\s+PMT\s+#?[\d\-]+/gi, "")
+    .replace(/\s+\*[\w\d]+$/i, "")
+    .replace(/\s+REF[\s:#]+[\w\d]+/gi, "")
+    .replace(/\s+\d{6,}$/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
 
-// ── Recurring bill detection (6-month window) ────────────────────────────────
-// Detects any cadence (weekly, monthly, bimonthly, quarterly) by measuring the
-// average gap between occurrences and projecting forward. Variable-amount bills
-// (garbage, water) are shown with "est." and average amount.
-function detectRecurringBills(txs: Transaction[]) {
+// ── Recurring spend analysis (12-month window) ────────────────────────────────
+// A merchant is "recurring" if it appears with a consistent cadence across months.
+// Returns merchants sorted by monthly-equivalent cost (highest first), plus
+// the total estimated monthly recurring spend.
+interface RecurringItem {
+  id: string;
+  label: string;
+  avgAmt: number;           // average charge per occurrence
+  monthlyEquiv: number;     // cost normalised to per-month
+  cadence: string;          // weekly / monthly / bimonthly / quarterly
+  isVariable: boolean;      // true if amount varies >25%
+  occurrences: number;      // how many times seen in 12 months
+}
+
+function analyzeRecurringSpend(txs: Transaction[]): { items: RecurringItem[]; totalMonthly: number } {
   const debits = txs.filter((t) => t.amount >= 10);
 
-  // Group by normalized name
   const byMerchant: Record<string, { label: string; txs: Transaction[] }> = {};
   for (const tx of debits) {
     const key = normalizeName(tx).toLowerCase();
@@ -61,19 +68,16 @@ function detectRecurringBills(txs: Transaction[]) {
     byMerchant[key].txs.push(tx);
   }
 
-  const now = Date.now();
-  const bills: {
-    id: string; label: string; amt: number; isVariable: boolean;
-    cadence: string; dueDate: Date; daysUntil: number;
-  }[] = [];
+  const items: RecurringItem[] = [];
 
   for (const { label, txs: group } of Object.values(byMerchant)) {
-    if (group.length < 2) continue; // need at least 2 occurrences
+    // Need at least 2 occurrences AND the merchant must span at least 2 distinct months
+    const distinctMonths = new Set(group.map((t) => t.date.slice(0, 7))).size;
+    if (group.length < 2 || distinctMonths < 2) continue;
 
-    // Sort chronologically
     const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
 
-    // Measure average gap between consecutive occurrences
+    // Average gap between consecutive charges
     const gaps: number[] = [];
     for (let i = 1; i < sorted.length; i++) {
       const d1 = new Date(sorted[i - 1].date + "T12:00:00").getTime();
@@ -82,95 +86,108 @@ function detectRecurringBills(txs: Transaction[]) {
     }
     const avgGap = gaps.reduce((s, g) => s + g, 0) / gaps.length;
 
-    // Classify cadence — ignore if gap is too irregular or too infrequent
-    let cadenceLabel: string;
-    if (avgGap <= 10)        cadenceLabel = "weekly";
-    else if (avgGap <= 45)   cadenceLabel = "monthly";
-    else if (avgGap <= 75)   cadenceLabel = "bimonthly";
-    else if (avgGap <= 105)  cadenceLabel = "quarterly";
-    else continue; // too infrequent to be a bill
+    // Cadence classification
+    let cadence: string;
+    let monthlyMultiplier: number; // how many times per month
+    if (avgGap <= 10)       { cadence = "weekly";     monthlyMultiplier = 4.3;  }
+    else if (avgGap <= 45)  { cadence = "monthly";    monthlyMultiplier = 1;    }
+    else if (avgGap <= 75)  { cadence = "bimonthly";  monthlyMultiplier = 0.5;  }
+    else if (avgGap <= 105) { cadence = "quarterly";  monthlyMultiplier = 0.33; }
+    else continue; // too infrequent / one-off
 
-    // Check gap consistency — skip if wildly irregular (not a real cadence)
+    // Gap regularity check — if gaps are wildly inconsistent it's not a cadence
     if (gaps.length > 1) {
-      const gapVariance = Math.max(...gaps) / Math.min(...gaps);
-      if (gapVariance > 2.5) continue; // gaps vary too much
+      const gapStdDev = Math.sqrt(gaps.reduce((s, g) => s + (g - avgGap) ** 2, 0) / gaps.length);
+      if (gapStdDev / avgGap > 0.6) continue; // >60% coefficient of variation = not regular
     }
 
     // Amount stats
     const amounts = sorted.map((t) => t.amount);
     const avgAmt = amounts.reduce((s, a) => s + a, 0) / amounts.length;
-    const maxAmt = Math.max(...amounts);
-    const minAmt = Math.min(...amounts);
-    const isVariable = maxAmt / minAmt > 1.3; // >30% spread = variable
+    const isVariable = Math.max(...amounts) / Math.min(...amounts) > 1.25;
 
-    // Project next due date = last occurrence + average gap
-    const lastDate = new Date(sorted[sorted.length - 1].date + "T12:00:00");
-    const nextDate = new Date(lastDate.getTime() + avgGap * 86400_000);
-    const daysUntil = Math.round((nextDate.getTime() - now) / 86400_000);
-
-    // Only show if due within next 60 days or up to 5 days overdue
-    if (daysUntil < -5 || daysUntil > 60) continue;
-
-    const latest = sorted[sorted.length - 1];
-    bills.push({
-      id: latest.id.toString(),
+    items.push({
+      id: sorted[sorted.length - 1].id.toString(),
       label,
-      amt: Math.round(avgAmt * 100) / 100,
+      avgAmt: Math.round(avgAmt * 100) / 100,
+      monthlyEquiv: Math.round(avgAmt * monthlyMultiplier * 100) / 100,
+      cadence,
       isVariable,
-      cadence: cadenceLabel,
-      dueDate: nextDate,
-      daysUntil,
+      occurrences: sorted.length,
     });
   }
 
-  return bills.sort((a, b) => a.daysUntil - b.daysUntil);
+  const sorted = items.sort((a, b) => b.monthlyEquiv - a.monthlyEquiv);
+  const totalMonthly = Math.round(sorted.reduce((s, i) => s + i.monthlyEquiv, 0) * 100) / 100;
+  return { items: sorted, totalMonthly };
 }
 
-function UpcomingBillsFromTx({ transactions, loading, limit = 5 }: { transactions: Transaction[]; loading: boolean; limit?: number }) {
+// ── Recurring spend component ─────────────────────────────────────────────────
+function RecurringSpend({ transactions, loading, limit = 6, onViewAll }: {
+  transactions: Transaction[];
+  loading: boolean;
+  limit?: number;
+  onViewAll?: () => void;
+}) {
   if (loading) {
     return <div style={{ padding: "24px 18px", color: T.fgMuted, fontSize: 13, textAlign: "center" }}>Loading…</div>;
   }
 
-  const bills = detectRecurringBills(transactions).slice(0, limit);
+  const { items, totalMonthly } = analyzeRecurringSpend(transactions);
 
-  if (bills.length === 0) {
+  if (items.length === 0) {
     return (
       <div style={{ padding: "24px 18px", display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-        <Icon name="calendar" size={28} color={T.borderSubtle} />
+        <Icon name="refresh" size={28} color={T.borderSubtle} />
         <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: T.fg, marginBottom: 4 }}>No recurring bills detected</div>
-          <div style={{ fontSize: 12.5, color: T.fgMuted }}>Sync transactions in the Spending tab — recurring payments appear here automatically.</div>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: T.fg, marginBottom: 4 }}>No patterns yet</div>
+          <div style={{ fontSize: 12.5, color: T.fgMuted }}>Sync 12 months of transactions in the Spending tab.</div>
         </div>
       </div>
     );
   }
 
+  const cadenceColors: Record<string, string> = {
+    weekly: T.accent, monthly: T.fgMuted, bimonthly: T.invest, quarterly: T.gold,
+  };
+
   return (
     <>
-      {bills.map((bill, i) => {
-        const dateLabel = bill.dueDate.toLocaleString("en-US", { month: "short", day: "numeric" });
-        const overdue = bill.daysUntil < 0;
-        const sub = [
-          dateLabel,
-          overdue ? "overdue" : bill.daysUntil === 0 ? "today" : null,
-          bill.cadence !== "monthly" ? bill.cadence : null,
-        ].filter(Boolean).join(" · ");
-        return (
-          <div key={bill.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 18px", borderTop: i ? `1px solid ${T.borderSubtle}` : "none" }}>
-            <span style={{ width: 30, height: 30, borderRadius: 8, background: T.bgChip, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-              <Icon name="calendar" size={15} color={T.fgMuted} />
-            </span>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600, fontSize: 13.5, color: T.fg }}>{bill.label}</div>
-              <div style={{ fontSize: 12, color: overdue ? T.negative : T.fgMuted, marginTop: 1 }}>{sub}</div>
-            </div>
-            <div style={{ textAlign: "right" }}>
-              <Money value={-bill.amt} size={14} weight={600} cents={false} />
-              {bill.isVariable && <div style={{ fontSize: 11, color: T.fgSubtle, marginTop: 1 }}>est.</div>}
+      {/* Total estimate header */}
+      <div style={{ padding: "12px 18px", background: T.bgSunken, borderBottom: `1px solid ${T.borderSubtle}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 12.5, color: T.fgMuted, fontFamily: FONT }}>Est. monthly recurring</span>
+        <Money value={-totalMonthly} size={15} weight={700} cents={false} />
+      </div>
+
+      {items.slice(0, limit).map((item, i) => (
+        <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 18px", borderTop: i ? `1px solid ${T.borderSubtle}` : "none" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 13, color: T.fg, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.label}</div>
+            <div style={{ fontSize: 11.5, marginTop: 1, display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ color: cadenceColors[item.cadence] ?? T.fgMuted, fontWeight: 600 }}>{item.cadence}</span>
+              <span style={{ color: T.fgSubtle }}>·</span>
+              <span style={{ color: T.fgSubtle }}>{item.occurrences}× in 12mo</span>
+              {item.isVariable && <><span style={{ color: T.fgSubtle }}>·</span><span style={{ color: T.fgSubtle }}>est.</span></>}
             </div>
           </div>
-        );
-      })}
+          <div style={{ textAlign: "right", flexShrink: 0 }}>
+            <Money value={-item.avgAmt} size={13} weight={600} cents={false} />
+            {item.cadence !== "monthly" && (
+              <div style={{ fontSize: 11, color: T.fgSubtle, marginTop: 1 }}>
+                ~<Money value={-item.monthlyEquiv} size={11} weight={500} cents={false} />/mo
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {items.length > limit && onViewAll && (
+        <div style={{ padding: "10px 18px", borderTop: `1px solid ${T.borderSubtle}`, textAlign: "center" }}>
+          <button onClick={onViewAll} style={{ background: "none", border: "none", color: T.accent, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: FONT }}>
+            View all {items.length} recurring charges
+          </button>
+        </div>
+      )}
     </>
   );
 }
@@ -219,8 +236,8 @@ export default function OverviewScreen() {
   const [showAllBills, setShowAllBills] = useState(false);
 
   useEffect(() => {
-    // Fetch 180 days (6 months) for reliable recurring bill detection
-    fetchTransactions(180)
+    // Fetch 365 days (12 months) for reliable recurring spend analysis
+    fetchTransactions(365)
       .then(setTransactions)
       .catch(console.error)
       .finally(() => setTxLoading(false));
@@ -374,29 +391,32 @@ export default function OverviewScreen() {
           )}
         </div>
 
-        {/* Upcoming bills — detected from recurring transactions */}
+        {/* Recurring spend — 12-month pattern analysis */}
         <div style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, overflow: "hidden" }}>
           <CardHead
-            title="Upcoming bills"
+            title="Recurring spend"
             action={
               <button onClick={() => setShowAllBills(true)} style={{ background: "none", border: "none", color: T.accent, fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: FONT, padding: 0, display: "inline-flex", alignItems: "center", gap: 4 }}>
                 View all <Icon name="arrow" size={13} color={T.accent} />
               </button>
             }
           />
-          <UpcomingBillsFromTx transactions={transactions} loading={txLoading} limit={5} />
+          <RecurringSpend transactions={transactions} loading={txLoading} limit={6} onViewAll={() => setShowAllBills(true)} />
         </div>
 
-        {/* All bills modal */}
+        {/* All recurring spend modal */}
         {showAllBills && (
           <div onClick={() => setShowAllBills(false)} style={{ position: "fixed", inset: 0, background: "rgba(22,17,14,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
-            <div onClick={(e) => e.stopPropagation()} style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, width: 480, maxWidth: "calc(100vw - 32px)", maxHeight: "80vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(22,17,14,.14)" }}>
+            <div onClick={(e) => e.stopPropagation()} style={{ background: T.bgRaised, border: `1px solid ${T.border}`, borderRadius: T.radiusLg, width: 520, maxWidth: "calc(100vw - 32px)", maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 12px 40px rgba(22,17,14,.14)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: `1px solid ${T.borderSubtle}` }}>
-                <div style={{ fontWeight: 700, fontSize: 16, color: T.fg, fontFamily: FONT }}>All upcoming bills</div>
-                <button onClick={() => setShowAllBills(false)} style={{ background: "none", border: "none", fontSize: 20, color: T.fgMuted, cursor: "pointer", lineHeight: 1 }}>×</button>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 16, color: T.fg, fontFamily: FONT }}>All recurring charges</div>
+                  <div style={{ fontSize: 12.5, color: T.fgMuted, marginTop: 2, fontFamily: FONT }}>Based on 12 months of transactions</div>
+                </div>
+                <button onClick={() => setShowAllBills(false)} style={{ background: "none", border: "none", fontSize: 22, color: T.fgMuted, cursor: "pointer", lineHeight: 1 }}>×</button>
               </div>
               <div style={{ overflowY: "auto", flex: 1 }}>
-                <UpcomingBillsFromTx transactions={transactions} loading={txLoading} limit={50} />
+                <RecurringSpend transactions={transactions} loading={txLoading} limit={100} />
               </div>
             </div>
           </div>

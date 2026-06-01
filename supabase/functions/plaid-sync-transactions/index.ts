@@ -100,9 +100,9 @@ serve(async (req) => {
       });
     }
 
-    // ── Date range: last 90 days ─────────────────────────────────────────────
+    // ── Date range: last 365 days (12 months for recurring analysis) ─────────
     const end   = new Date().toISOString().slice(0, 10);
-    const start = new Date(Date.now() - 90 * 86400_000).toISOString().slice(0, 10);
+    const start = new Date(Date.now() - 365 * 86400_000).toISOString().slice(0, 10);
 
     let totalSynced = 0;
 
