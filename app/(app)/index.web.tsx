@@ -29,59 +29,75 @@ function institutionName(acct: Account): string {
   return "Chase";
 }
 
+// ── Name normalization ────────────────────────────────────────────────────────
+// ACH/bank transactions often have unique IDs appended each month.
+// Strip them so "MORTGAGE PMT ID:12345" and "MORTGAGE PMT ID:67890" group together.
+function normalizeName(tx: Transaction): string {
+  const raw = (tx.merchant_name ?? tx.name);
+  return raw
+    .replace(/\s+(PPD|WEB|CCD|TEL|ACH)\s+.*$/i, "")   // strip ACH type + trailing ID
+    .replace(/\s+ID[:\s]+[\w\d\-]+/gi, "")              // strip "ID: 123456"
+    .replace(/\s+PMT\s+#?[\d\-]+/gi, "")                // strip payment numbers
+    .replace(/\s+\*[\w\d]+$/i, "")                      // strip * reference codes
+    .replace(/\s+REF[\s:#]+[\w\d]+/gi, "")              // strip REF codes
+    .replace(/\s+\d{6,}$/g, "")                         // strip long trailing numbers
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 // ── Recurring bill detection (6-month window) ────────────────────────────────
-// Requirements to be considered a bill:
-//   1. Amount ≥ $15 (filters out coffee, small purchases)
-//   2. Merchant appears in 3+ distinct calendar months
-//   3. Amounts are consistent (within 20% of median)
-//   4. Next due date projected from the day-of-month pattern
+// Criteria:
+//   1. Amount ≥ $15
+//   2. Normalized merchant name appears in 2+ months (3+ for amounts < $100)
+//   3. Amounts within 25% of median
+//   4. Due date predicted from day-of-month pattern
 function detectRecurringBills(txs: Transaction[]) {
   const debits = txs.filter((t) => t.amount >= 15);
 
-  // Group by merchant name
-  const byMerchant: Record<string, Transaction[]> = {};
+  // Group by NORMALIZED name
+  const byMerchant: Record<string, { label: string; txs: Transaction[] }> = {};
   for (const tx of debits) {
-    const key = (tx.merchant_name ?? tx.name).trim();
-    if (!byMerchant[key]) byMerchant[key] = [];
-    byMerchant[key].push(tx);
+    const key = normalizeName(tx).toLowerCase();
+    if (!key) continue;
+    if (!byMerchant[key]) byMerchant[key] = { label: normalizeName(tx), txs: [] };
+    byMerchant[key].txs.push(tx);
   }
 
   const now = Date.now();
   const bills: { id: string; label: string; amt: number; dueDate: Date; daysUntil: number }[] = [];
 
-  for (const [name, group] of Object.entries(byMerchant)) {
-    // Distinct calendar months
+  for (const { label, txs: group } of Object.values(byMerchant)) {
     const months = new Set(group.map((t) => t.date.slice(0, 7)));
-    if (months.size < 3) continue; // need 3+ months
-
-    // Check amount consistency (within 20% of median)
     const amounts = group.map((t) => t.amount).sort((a, b) => a - b);
     const median = amounts[Math.floor(amounts.length / 2)];
-    const consistent = amounts.every((a) => Math.abs(a - median) / median < 0.20);
+
+    // Require 3+ months for small amounts, 2+ for larger ones (mortgage-sized)
+    const minMonths = median >= 100 ? 2 : 3;
+    if (months.size < minMonths) continue;
+
+    // Amount consistency within 25%
+    const consistent = amounts.every((a) => Math.abs(a - median) / median < 0.25);
     if (!consistent) continue;
 
-    // Find the most common day-of-month
+    // Day-of-month prediction
     const days = group.map((t) => new Date(t.date + "T12:00:00").getDate());
     const dayFreq: Record<number, number> = {};
     for (const d of days) dayFreq[d] = (dayFreq[d] ?? 0) + 1;
     const typicalDay = parseInt(Object.entries(dayFreq).sort((a, b) => b[1] - a[1])[0][0]);
 
-    // Project next occurrence: next month at typical day
     const today = new Date();
     let next = new Date(today.getFullYear(), today.getMonth(), typicalDay);
     if (next.getTime() < now - 3 * 86400_000) {
       next = new Date(today.getFullYear(), today.getMonth() + 1, typicalDay);
     }
     const daysUntil = Math.round((next.getTime() - now) / 86400_000);
-
-    // Only show within next 45 days or up to 3 days overdue
     if (daysUntil < -3 || daysUntil > 45) continue;
 
-    const latest = group.sort((a, b) => b.date.localeCompare(a.date))[0];
-    bills.push({ id: latest.id.toString(), label: name, amt: median, dueDate: next, daysUntil });
+    const latest = [...group].sort((a, b) => b.date.localeCompare(a.date))[0];
+    bills.push({ id: latest.id.toString(), label, amt: median, dueDate: next, daysUntil });
   }
 
-  return bills.sort((a, b) => a.daysUntil - b.daysUntil).slice(0, 6);
+  return bills.sort((a, b) => a.daysUntil - b.daysUntil);
 }
 
 function UpcomingBillsFromTx({ transactions, loading, limit = 5 }: { transactions: Transaction[]; loading: boolean; limit?: number }) {
